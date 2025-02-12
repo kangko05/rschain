@@ -208,6 +208,10 @@ impl MerkleTree {
     pub fn verify(&self, hash: &Vec<u8>) -> bool {
         self.level_chain.verify(hash)
     }
+
+    pub fn root(&self) -> Vec<u8> {
+        self.root.clone()
+    }
 }
 
 // for debugging
