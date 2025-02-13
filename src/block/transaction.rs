@@ -1,3 +1,6 @@
+pub struct TxInput {}
+
+pub struct TxOutput {}
 pub struct Transaction {
     id: Vec<u8>, // hash
 
@@ -5,6 +8,6 @@ pub struct Transaction {
     outputs: Vec<TxOutput>,
 }
 
-pub struct TxInput {}
-
-pub struct TxOutput {}
+impl Transaction {
+    pub fn new() {}
+}

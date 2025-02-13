@@ -18,6 +18,10 @@ pub fn next_power_of_two(n: usize) -> usize {
     1 << (usize::BITS - n.leading_zeros())
 }
 
+pub fn hash_to_string(hash: &Vec<u8>) -> String {
+    hash.iter().map(|&by| format!("{:02x}", by)).collect()
+}
+
 #[cfg(test)]
 mod hash_test {
     use super::*;

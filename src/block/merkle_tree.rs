@@ -11,32 +11,9 @@
  * the tree
  */
 
-use std::fmt::Display;
-
 use crate::utils;
 
-#[derive(Debug)]
-pub enum MerkleError {
-    Message(String),
-}
-
-impl MerkleError {
-    pub fn err(msg: &str) -> MerkleError {
-        Self::Message(msg.to_string())
-    }
-}
-
-impl std::error::Error for MerkleError {}
-
-impl Display for MerkleError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MerkleError::Message(s) => write!(f, "{}", s),
-        }
-    }
-}
-
-type MerkleResult<T> = Result<T, MerkleError>;
+use super::{MerkleError, MerkleResult};
 
 //
 #[derive(Clone)]
@@ -156,7 +133,7 @@ impl MerkleLevelChain {
     // for debugging
     fn print(&self) {
         for node in &self.nodes {
-            println!("{}", hash_to_string(node));
+            println!("{}", utils::hash_to_string(node));
         }
 
         println!();
@@ -214,15 +191,8 @@ impl MerkleTree {
     }
 }
 
-// for debugging
-fn hash_to_string(hash: &Vec<u8>) -> String {
-    hash.iter().map(|&by| format!("{:02x}", by)).collect()
-}
-
 #[cfg(test)]
 mod merkle_tests {
-    use rand::Rng;
-
     use super::*;
 
     fn gen_test_cases(v: Vec<i32>) -> Vec<Vec<u8>> {
@@ -233,10 +203,9 @@ mod merkle_tests {
 
     fn gen_random_vector(length: usize) -> Vec<i32> {
         let mut v = vec![];
-        let mut rng = rand::rng();
 
         for _ in 0..length {
-            v.push(rng.random::<i32>());
+            v.push(rand::random::<i32>());
         }
 
         v
