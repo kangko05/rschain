@@ -13,9 +13,11 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{ser::SerializeStruct, Serialize};
+
 use super::{
     errors::{BlockError, BlockResult},
-    merkle_tree::MerkleTree,
+    MerkleTree, Transaction,
 };
 use crate::utils;
 
@@ -28,26 +30,55 @@ struct BlockHeader {
     nonce: u64,
 }
 
+impl Serialize for BlockHeader {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("BlockHeader", 5)?;
+        state.serialize_field("previous_hash", &self.previous_hash)?;
+        state.serialize_field("merkle_root", &self.merkle_root)?;
+        state.serialize_field("timestamp", &self.timestamp)?;
+        state.serialize_field("difficulty", &self.difficulty)?;
+        state.serialize_field("nonce", &self.nonce)?;
+        state.end()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Block {
     header: BlockHeader,
-    transactions: Vec<String>, // TODO: string for now -> Transaction
+    transactions: Vec<Transaction>,
+    max_tx: usize,
+}
+
+impl Serialize for Block {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("Block", 5)?;
+        state.serialize_field("header", &self.header)?;
+        state.serialize_field("transactions", &self.transactions)?;
+        state.end()
+    }
 }
 
 impl Block {
-    pub fn new(previous_hash: &str, transactions: &Vec<String>) -> BlockResult<Self> {
+    pub fn new(previous_hash: &str, transactions: &Vec<Transaction>) -> BlockResult<Self> {
         // hash transactions
+        let transactions = transactions.to_vec();
         let hashes = transactions
             .iter()
-            .map(|s| utils::sha256(s.as_bytes()))
-            .collect::<Vec<_>>();
+            .map(|tx| tx.get_id().clone())
+            .collect::<Vec<Vec<u8>>>();
 
         let merkle_tree = MerkleTree::build(&hashes)?;
 
         let header = BlockHeader {
             previous_hash: previous_hash.to_string(),
             merkle_root: merkle_tree.root(),
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            timestamp: utils::unixtime_now()?,
             difficulty: 4,
             nonce: 0,
         };
@@ -55,32 +86,28 @@ impl Block {
         Ok(Self {
             header,
             transactions: transactions.to_vec(),
+            max_tx: 15, // in bitcoin, limits depend on block size & tx size
+                        // 15 for now because this is only going to run locally with small number
+                        //    of nodes
         })
     }
 
     /// returns hash of current block contents
-    pub fn calculate_hash(&self) -> Vec<u8> {
-        let contents = format!(
-            "{}{}{}{}{}",
-            self.header.previous_hash,
-            utils::hash_to_string(&self.header.merkle_root),
-            self.header.timestamp,
-            self.header.difficulty,
-            self.header.nonce,
-        );
-
-        utils::sha256(contents.as_bytes())
+    pub fn calculate_hash(&self) -> BlockResult<Vec<u8>> {
+        let serialized = bincode::serialize(&self)?;
+        Ok(utils::sha256(&serialized))
     }
 
-    pub fn mine(&mut self) -> Vec<u8> {
-        let mut hash = self.calculate_hash();
+    /// returns mined hash
+    pub fn mine(&mut self) -> BlockResult<Vec<u8>> {
+        let mut hash = self.calculate_hash()?;
 
         while !self.is_valid_hash(&hash) {
             self.header.nonce += 1;
-            hash = self.calculate_hash();
+            hash = self.calculate_hash()?;
         }
 
-        hash
+        Ok(hash)
     }
 
     /// checks if it satisfies difficulty (if hash string starts with # of diff 0s)
@@ -111,8 +138,8 @@ impl Block {
         let hashes = self
             .transactions
             .iter()
-            .map(|s| utils::sha256(s.as_bytes()))
-            .collect::<Vec<_>>();
+            .map(|tx| tx.get_id().clone())
+            .collect::<Vec<Vec<u8>>>();
 
         let mtl = MerkleTree::build(&hashes)?;
 
@@ -120,7 +147,7 @@ impl Block {
             return Err(BlockError::InvalidMerkleRoot);
         }
 
-        if !self.is_valid_hash(&self.calculate_hash()) {
+        if !self.is_valid_hash(&self.calculate_hash().unwrap()) {
             return Err(BlockError::InvalidPOW);
         }
 
@@ -131,6 +158,36 @@ impl Block {
     pub fn get_timestamp(&self) -> u64 {
         self.header.timestamp
     }
+
+    pub fn get_coinbase_tx(&self) -> BlockResult<Transaction> {
+        match self.transactions.first() {
+            Some(tx) => {
+                if !tx.is_coinbase() {
+                    return Err(BlockError::from_str("failed to find coinbase tx"));
+                } else {
+                    return Ok(tx.clone());
+                }
+            }
+            None => Err(BlockError::from_str("block has no transactions")),
+        }
+    }
+
+    pub fn get_transactions(&self) -> BlockResult<&Vec<Transaction>> {
+        if self.transactions.len() == 0 {
+            return Err(BlockError::from_str("empty transactions"));
+        }
+
+        Ok(&self.transactions)
+    }
+
+    /// TODO: implement this
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    pub fn get_max_tx(&self) -> usize {
+        self.max_tx
+    }
 }
 
 #[cfg(test)]
@@ -139,26 +196,74 @@ mod block_tests {
 
     use super::*;
 
+    fn test_tx(tmsg: &str) -> Transaction {
+        Transaction::coinbase(tmsg, 0).expect("failed to build a transaction")
+    }
+
     #[test]
     fn new_block() {
-        let _ = Block::new("", &vec![String::from("a")]);
+        let blk =
+            Block::new("coinbase", &vec![test_tx("coinbase")]).expect("failed to build a block");
+        dbg!(blk);
     }
 
     #[test]
     fn get_hash() {
-        let block = Block::new("", &vec![String::from("a")]).unwrap();
-        dbg!(utils::hash_to_string(&block.calculate_hash()));
+        let block = Block::new("", &vec![test_tx("coinbase")]).unwrap();
+        dbg!(utils::hash_to_string(&block.calculate_hash().unwrap()));
     }
 
     #[test]
     fn mine() {
-        let mut block =
-            Block::new("genesis", &vec!["hello".to_string(), "world".to_string()]).unwrap();
-        let hash = block.mine();
+        let mut block = Block::new("genesis", &vec![test_tx("coinbase")]).unwrap();
+        let hash = block.mine().unwrap();
 
         assert!(block.is_valid_hash(&hash));
     }
 
     #[test]
-    fn validate() {}
+    fn validate() {
+        let mut blk1 = Block::new("", &vec![test_tx("first")]).expect("failed to create a block");
+        blk1.mine().unwrap();
+        let blk1_hash = utils::hash_to_string(&blk1.calculate_hash().unwrap());
+        let mut blk2 =
+            Block::new(&blk1_hash, &vec![test_tx("second")]).expect("failed to create a block");
+
+        blk2.mine().unwrap();
+
+        assert!(blk2.validate(&blk1_hash, blk1.get_timestamp()).is_ok());
+    }
+
+    #[test]
+    fn validate_wrong_prev_hash() {
+        let mut blk1 = Block::new("", &vec![test_tx("first")]).expect("failed to create a block");
+        blk1.mine().unwrap();
+        let wrong_hash = "totally_wrong_hash";
+        let mut blk2 =
+            Block::new(wrong_hash, &vec![test_tx("second")]).expect("failed to create a block");
+        blk2.mine().unwrap();
+
+        assert!(matches!(
+            blk2.validate(
+                &utils::hash_to_string(&blk1.calculate_hash().unwrap()),
+                blk1.get_timestamp()
+            ),
+            Err(BlockError::InvalidPreviousHash)
+        ));
+    }
+
+    #[test]
+    fn validate_wrong_timestamp() {
+        let mut blk1 = Block::new("", &vec![test_tx("first")]).expect("failed to create a block");
+        blk1.mine().unwrap();
+        let blk1_hash = utils::hash_to_string(&blk1.calculate_hash().unwrap());
+        let mut blk2 =
+            Block::new(&blk1_hash, &vec![test_tx("second")]).expect("failed to create a block");
+        blk2.mine().unwrap();
+
+        assert!(matches!(
+            blk2.validate(&blk1_hash, blk2.get_timestamp() + 1),
+            Err(BlockError::InvalidTimeStamp)
+        ));
+    }
 }

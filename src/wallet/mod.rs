@@ -42,6 +42,18 @@ impl Wallet {
 
         bs58::encode(address_bytes).into_string()
     }
+
+    pub fn get_pub_key(&self) -> PublicKey {
+        self.public_key
+    }
+
+    pub fn get_secret_key(&self) -> SecretKey {
+        self.private_key
+    }
+
+    pub fn get_address(&self) -> &String {
+        &self.address
+    }
 }
 
 #[cfg(test)]

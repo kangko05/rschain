@@ -1,3 +1,5 @@
+use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
+
 use sha2::{Digest, Sha256};
 
 pub fn sha256(it: &[u8]) -> Vec<u8> {
@@ -20,6 +22,10 @@ pub fn next_power_of_two(n: usize) -> usize {
 
 pub fn hash_to_string(hash: &Vec<u8>) -> String {
     hash.iter().map(|&by| format!("{:02x}", by)).collect()
+}
+
+pub fn unixtime_now() -> Result<u64, SystemTimeError> {
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
 
 #[cfg(test)]
