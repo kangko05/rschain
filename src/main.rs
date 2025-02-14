@@ -1,4 +1,4 @@
-use std::{error::Error, io::Write};
+use std::error::Error;
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt},
