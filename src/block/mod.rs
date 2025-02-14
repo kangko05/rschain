@@ -9,5 +9,4 @@ mod tx_pool;
 
 pub use block::Block;
 pub use errors::{MerkleError, MerkleResult};
-pub use merkle_tree::MerkleTree;
 pub use transaction::Transaction;

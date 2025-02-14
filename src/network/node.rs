@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::utils;
 
-use super::errors::NetworkResult;
+use super::errors::{NetworkError, NetworkResult};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum NetworkMessage {
@@ -41,7 +41,7 @@ pub struct Node {
     port: u16,
     socket_string: String,
     start_time: u64,
-    peers: Arc<Mutex<HashMap<String, TcpStream>>>,
+    peers: Arc<Mutex<HashMap<String, Arc<TcpStream>>>>,
 }
 
 impl Node {
@@ -62,8 +62,11 @@ impl Node {
 
     pub async fn test_run(&mut self) -> NetworkResult<()> {
         let listen_handle = self.listen()?;
+        println!("listening to {}", self.port);
 
-        match tokio::try_join!(listen_handle) {
+        // ping
+
+        match tokio::try_join!(listen_handle,) {
             Ok(_) => {}
             Err(err) => eprintln!("{err}"),
         };
@@ -74,7 +77,6 @@ impl Node {
     fn listen(&mut self) -> NetworkResult<JoinHandle<()>> {
         let node_addr = self.socket_string.clone();
         let peers = Arc::clone(&self.peers);
-        println!("listening to {}", self.port);
 
         Ok(tokio::spawn(async move {
             let listener = if let Ok(listener) = TcpListener::bind(&node_addr).await {
@@ -98,10 +100,26 @@ impl Node {
         }))
     }
 
+    pub async fn connect_to_peer(&mut self, addr: String) -> NetworkResult<()> {
+        let socket = TcpSocket::new_v4()?;
+        socket.set_keepalive(true)?;
+
+        let stream = socket.connect(addr.parse()?).await?;
+        let addr = stream.peer_addr()?.to_string();
+        if let Ok(mut peers_guard) = self.peers.lock() {
+            peers_guard.insert(addr, Arc::new(stream));
+        }
+
+        Ok(())
+    }
+}
+
+// helper functions
+impl Node {
     async fn read_stream(
         stream: TcpStream,
         addr: &str,
-        peers: Arc<Mutex<HashMap<String, TcpStream>>>,
+        peers: Arc<Mutex<HashMap<String, Arc<TcpStream>>>>,
     ) {
         let mut buf = [0; 1024];
         let mut stream = stream;
@@ -130,7 +148,7 @@ impl Node {
         // add peer
         match peers.lock() {
             Ok(mut peers_guard) => {
-                peers_guard.insert(addr.to_string(), stream);
+                peers_guard.insert(addr.to_string(), Arc::new(stream));
             }
             Err(err) => eprintln!("failed to add peer {addr}: {err}"),
         }
@@ -149,28 +167,18 @@ impl Node {
             Err(err) => eprintln!("failed to remove {addr}: {err}"),
         };
     }
-
     fn handle_message(
         msg_buf: &[u8],
-        peers: Arc<Mutex<HashMap<String, TcpStream>>>,
+        peers: Arc<Mutex<HashMap<String, Arc<TcpStream>>>>,
     ) -> Option<Vec<u8>> {
         if let Ok(msg) = serde_json::from_slice::<NetworkMessage>(msg_buf) {
             match msg {
                 NetworkMessage::GetAddr => {
-                    if let Ok(peers_guard) = peers.lock() {
-                        let resp = peers_guard
-                            .keys()
-                            .map(|key| key.to_string())
-                            .collect::<Vec<String>>();
-
-                        let wb = serde_json::to_vec(&json!(resp)).unwrap();
-
-                        return Some(wb);
-                    }
+                    return obtain_mutex_lock(Arc::clone(&peers), Self::getaddr_resp_json).ok();
                 }
 
                 NetworkMessage::Ping => {
-                    return Some(serde_json::to_vec(&json!(NetworkMessage::Pong)).unwrap());
+                    return serde_json::to_vec(&json!(NetworkMessage::Pong)).ok();
                 }
 
                 _ => println!("ignoring for now"),
@@ -183,21 +191,27 @@ impl Node {
         None
     }
 
-    pub async fn connect_to_peer(&mut self, addr: String) -> NetworkResult<()> {
-        let socket = TcpSocket::new_v4()?;
-        socket.set_keepalive(true)?;
+    fn getaddr_resp_json(
+        peers: MutexGuard<HashMap<String, Arc<TcpStream>>>,
+    ) -> NetworkResult<Vec<u8>> {
+        let resp = peers
+            .keys()
+            .map(|key| key.to_string())
+            .collect::<Vec<String>>();
 
-        let stream = socket.connect(addr.parse()?).await?;
-        let addr = stream.peer_addr()?.to_string();
-        if let Ok(mut peers_guard) = self.peers.lock() {
-            peers_guard.insert(addr, stream);
-        }
-
-        Ok(())
+        Ok(serde_json::to_vec(&json!(resp))?)
     }
+}
 
-    /// send pings to peers -> if fail to connect, remove it from peers
-    pub async fn ping(&self) {}
+// apparently this can't handle async closure because its not stable?
+fn obtain_mutex_lock<T, U, F>(mutex: Arc<Mutex<T>>, func: F) -> NetworkResult<U>
+where
+    F: FnOnce(MutexGuard<T>) -> NetworkResult<U>,
+{
+    match mutex.lock() {
+        Ok(mutex_guard) => func(mutex_guard),
+        Err(err) => Err(NetworkError::str(&err.to_string())),
+    }
 }
 
 #[cfg(test)]

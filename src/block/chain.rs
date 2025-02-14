@@ -6,7 +6,7 @@ use super::{
     errors::{BlockError, BlockResult},
     transaction::TxOutput,
     tx_pool::TxPool,
-    Block, Transaction,
+    Transaction,
 };
 
 #[derive(Debug)]
