@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
-use tokio::io::AsyncReadExt;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -14,12 +15,22 @@ use crate::utils;
 
 use super::errors::NetworkResult;
 
-#[derive(Debug, Serialize)]
-struct PeersVec(Vec<String>);
+#[derive(Debug, Serialize, Deserialize)]
+pub enum NetworkMessage {
+    GetAddr,
+    GetAddrResp(Vec<String>),
+    Ping,
+    Pong,
+}
 
-impl FromIterator<String> for PeersVec {
-    fn from_iter<T: IntoIterator<Item = String>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+impl NetworkMessage {
+    pub fn create_getaddr_resp(peers_map: HashMap<String, TcpStream>) -> Self {
+        let keys_vec = peers_map
+            .keys()
+            .map(|key| key.to_string())
+            .collect::<Vec<String>>();
+
+        Self::GetAddrResp(keys_vec)
     }
 }
 
@@ -66,51 +77,110 @@ impl Node {
         println!("listening to {}", self.port);
 
         Ok(tokio::spawn(async move {
-            let listener = TcpListener::bind(&node_addr).await.unwrap();
+            let listener = if let Ok(listener) = TcpListener::bind(&node_addr).await {
+                listener
+            } else {
+                return;
+            };
 
-            'outer: loop {
+            loop {
                 match listener.accept().await {
-                    Ok((mut stream, sock_addr)) => {
-                        let ss = sock_addr.to_string();
-
-                        // handle get addr here
-                        // handle message here
-                        // for test
-                        let mut buf = [0; 1024];
-                        while let Ok(n) = stream.read(&mut buf).await {
-                            let msg = String::from_utf8_lossy(&buf[..n]).to_string();
-
-                            match msg.as_str() {
-                                "getaddr\n" => {
-                                    println!("get address?");
-                                    if let Ok(peers_guard) = peers.lock() {
-                                        let pm = peers_guard
-                                            .iter()
-                                            .map(|(key, _)| key.to_string())
-                                            .collect::<PeersVec>();
-
-                                        dbg!(pm);
-                                    }
-                                }
-
-                                "print\n" => println!("msg"),
-                                _ => break 'outer,
-                            }
-                        }
-
-                        match peers.lock() {
-                            Ok(mut peers_guard) => {
-                                if peers_guard.get(&ss).is_none() {
-                                    peers_guard.insert(ss, stream);
-                                }
-                            }
-                            Err(err) => eprintln!("{err}"),
-                        }
+                    Ok((stream, socket_addr)) => {
+                        let peers = Arc::clone(&peers);
+                        tokio::spawn(async move {
+                            Self::read_stream(stream, &socket_addr.to_string(), peers).await;
+                        });
                     }
+
                     Err(err) => eprintln!("{err}"),
-                };
+                }
             }
         }))
+    }
+
+    async fn read_stream(
+        stream: TcpStream,
+        addr: &str,
+        peers: Arc<Mutex<HashMap<String, TcpStream>>>,
+    ) {
+        let mut buf = [0; 1024];
+        let mut stream = stream;
+        loop {
+            match stream.read(&mut buf).await {
+                // client disconnected
+                // - just log disconnection
+                // - removing peers will be handled through ping method
+                Ok(0) => {
+                    println!("{addr} disconnectd");
+                    break;
+                }
+
+                // handle message here
+                // - planning to communicate through json format
+                Ok(n) => {
+                    if let Some(resp) = Self::handle_message(&buf[..n], Arc::clone(&peers)) {
+                        stream.write_all(&resp).await.unwrap();
+                    }
+                }
+
+                Err(err) => eprintln!("{err}"),
+            };
+        }
+
+        // add peer
+        match peers.lock() {
+            Ok(mut peers_guard) => {
+                peers_guard.insert(addr.to_string(), stream);
+            }
+            Err(err) => eprintln!("failed to add peer {addr}: {err}"),
+        }
+
+        dbg!(&peers);
+    }
+
+    fn remove_peer(peers: &mut Arc<Mutex<HashMap<String, TcpStream>>>, addr: &str) {
+        match peers.lock() {
+            Ok(mut peers_guard) => {
+                if peers_guard.remove(addr).is_none() {
+                    eprintln!("failed to remove {addr}");
+                }
+            }
+
+            Err(err) => eprintln!("failed to remove {addr}: {err}"),
+        };
+    }
+
+    fn handle_message(
+        msg_buf: &[u8],
+        peers: Arc<Mutex<HashMap<String, TcpStream>>>,
+    ) -> Option<Vec<u8>> {
+        if let Ok(msg) = serde_json::from_slice::<NetworkMessage>(msg_buf) {
+            match msg {
+                NetworkMessage::GetAddr => {
+                    if let Ok(peers_guard) = peers.lock() {
+                        let resp = peers_guard
+                            .keys()
+                            .map(|key| key.to_string())
+                            .collect::<Vec<String>>();
+
+                        let wb = serde_json::to_vec(&json!(resp)).unwrap();
+
+                        return Some(wb);
+                    }
+                }
+
+                NetworkMessage::Ping => {
+                    return Some(serde_json::to_vec(&json!(NetworkMessage::Pong)).unwrap());
+                }
+
+                _ => println!("ignoring for now"),
+            }
+        } else {
+            let msg = String::from_utf8_lossy(msg_buf);
+            println!("{msg}");
+        }
+
+        None
     }
 
     pub async fn connect_to_peer(&mut self, addr: String) -> NetworkResult<()> {
