@@ -1,4 +1,5 @@
 mod block;
+mod network;
 mod utils;
 mod wallet;
 
