@@ -6,7 +6,7 @@ use secp256k1::{PublicKey, Secp256k1, SecretKey};
 
 use crate::utils;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Wallet {
     public_key: PublicKey,
     private_key: SecretKey,

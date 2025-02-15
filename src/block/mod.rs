@@ -8,5 +8,7 @@ mod transaction;
 mod tx_pool;
 
 pub use block::Block;
-pub use errors::{MerkleError, MerkleResult};
+pub use chain::Chain;
+pub use errors::{BlockResult, MerkleError, MerkleResult};
+pub use merkle_tree::MerkleTree;
 pub use transaction::Transaction;

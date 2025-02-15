@@ -39,28 +39,36 @@ async fn run_client() {
     let stdin = tokio::io::stdin();
     let mut r = tokio::io::BufReader::new(stdin);
 
-    while buf != "exit\n" {
-        if let Err(err) = r.read_line(&mut buf).await {
-            eprintln!("{err}");
-            continue;
-        };
+    if let Err(err) = r.read_line(&mut buf).await {
+        eprintln!("{err}");
+    };
 
-        buf = buf.trim().to_string();
+    buf = buf.trim().to_string();
 
-        if !buf.is_empty() {
-            match buf.as_str() {
-                "getaddr" | "getaddr\n" => {
-                    let msg = json!(NetworkMessage::GetAddr);
-                    let msg = serde_json::to_vec(&msg).unwrap();
+    if !buf.is_empty() {
+        match buf.as_str() {
+            "getaddr" | "getaddr\n" => {
+                let msg = json!(NetworkMessage::GetAddr);
+                let msg = serde_json::to_vec(&msg).unwrap();
+                let length = (msg.len() as u32).to_be_bytes();
 
-                    stream.write_all(&msg).await.unwrap();
-                }
-                _ => {
-                    if let Err(err) = stream.write_all(buf.as_bytes()).await {
-                        eprintln!("{err}");
-                    } else {
-                        buf.clear();
-                    }
+                stream.write_all(&length).await.unwrap();
+                stream.write_all(&msg).await.unwrap();
+            }
+
+            "ping" | "ping\n" => {
+                let msg = json!(NetworkMessage::Ping);
+                let msg = serde_json::to_vec(&msg).unwrap();
+                let length = (msg.len() as u32).to_be_bytes();
+
+                stream.write_all(&length).await.unwrap();
+                stream.write_all(&msg).await.unwrap();
+            }
+            _ => {
+                if let Err(err) = stream.write_all(buf.as_bytes()).await {
+                    eprintln!("{err}");
+                } else {
+                    buf.clear();
                 }
             }
         }

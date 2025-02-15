@@ -6,7 +6,7 @@ use super::{
     errors::{BlockError, BlockResult},
     transaction::TxOutput,
     tx_pool::TxPool,
-    Transaction,
+    Block, Transaction,
 };
 
 #[derive(Debug)]
@@ -23,6 +23,28 @@ impl Chain {
             tx_pool: TxPool::new(),
             utxos: HashMap::new(),
         }
+    }
+
+    pub fn from(blocks: Vec<Block>) -> BlockResult<Self> {
+        if blocks.is_empty() {
+            return Err(BlockError::from_str(""));
+        }
+
+        let mut chain = Self::new();
+
+        chain.genesis(&blocks[0])?;
+        chain.add_utxos(&blocks[0])?;
+
+        let blocks_len = blocks.len();
+
+        for i in 1..blocks_len {
+            chain.add_blk(&blocks[i])?;
+            chain.add_utxos(&blocks[i])?;
+        }
+
+        chain.blocks = blocks;
+
+        Ok(chain)
     }
 
     pub fn add_tx(&mut self, tx: &Transaction) {
@@ -172,7 +194,80 @@ impl Chain {
 
 #[cfg(test)]
 mod chain_tests {
+    use rand::Rng;
+
+    use crate::{block::errors::TxResult, wallet::Wallet};
+
     use super::*;
+
+    // sending wallet have to contain some coin
+    fn gen_test_txs(
+        chain: &Chain,
+        sending_wallet: &Wallet,
+        wallets: &Vec<Wallet>,
+    ) -> TxResult<(Wallet, Vec<Transaction>)> {
+        // random tx
+        let mut rng = rand::thread_rng();
+        let r: usize = rng.gen_range(0..100);
+        let mut txs = vec![Transaction::coinbase(
+            wallets[r].get_address(),
+            chain.get_block_height(),
+        )?];
+
+        for _ in 0..10 {
+            let mut r2: usize = rng.gen_range(0..100);
+
+            while r == r2 {
+                r2 = rng.gen_range(0..100);
+            }
+
+            let to_address = wallets[r2].get_address();
+            let random_value: u64 = rng.gen_range(1..1000);
+
+            let utxos = chain.get_utxos();
+            let outputs = chain.get_address_txs(sending_wallet.get_address());
+            let tx = Transaction::new(&utxos, &sending_wallet, outputs, &to_address, random_value)?;
+
+            txs.push(tx);
+        }
+
+        let wallet = wallets[r].clone();
+
+        Ok((wallet, txs))
+    }
+
+    fn gen_test_chain() -> BlockResult<Chain> {
+        let genesis_wallet = Wallet::new();
+        let mut chain = Chain::new();
+        let genesis_txs = vec![Transaction::coinbase(
+            genesis_wallet.get_address(),
+            chain.get_block_height(),
+        )?];
+        let mut genesis_blk = Block::new("", &genesis_txs)?;
+
+        genesis_blk.mine()?;
+        chain.genesis(&genesis_blk)?;
+
+        // random wallets
+        let mut wallets = vec![];
+
+        for _ in 0..100 {
+            wallets.push(Wallet::new());
+        }
+
+        // random txs
+        let mut sent_wallet = genesis_wallet;
+        for _ in 0..10 {
+            let (wallet, txs) = gen_test_txs(&chain, &sent_wallet, &wallets)?;
+            sent_wallet = wallet;
+
+            let mut new_block = Block::new(&chain.get_last_block_hash_string()?, &txs)?;
+            new_block.mine()?;
+            chain.add_blk(&new_block)?;
+        }
+
+        Ok(chain)
+    }
 
     #[test]
     fn new() {
@@ -204,5 +299,52 @@ mod chain_tests {
         chain.add_blk(&new_blk).expect("failed to add a new block");
 
         dbg!(chain);
+    }
+
+    #[test]
+    fn from_blocks() {
+        let test_chain = gen_test_chain().expect("failed to gen test chain");
+        let blocks = test_chain.blocks.clone();
+
+        let new_chain = match Chain::from(blocks) {
+            Ok(chain) => chain,
+            Err(err) => panic!("{err}"),
+        };
+
+        // 1. matching utxos
+        let orig_utxos = test_chain.get_utxos();
+        let recon_utxos = new_chain.get_utxos();
+
+        assert_eq!(
+            orig_utxos.len(),
+            recon_utxos.len(),
+            "utxos length don't match"
+        );
+
+        // 2. check utxo elements
+        for ((orig_txid, orig_idx), orig_output) in orig_utxos {
+            let found = recon_utxos.iter().any(|((txid, idx), output)| {
+                txid == orig_txid
+                    && idx == orig_idx
+                    && output.get_address() == orig_output.get_address()
+                    && output.get_value() == orig_output.get_value()
+            });
+            assert!(found, "Missing or mismatched UTXO");
+        }
+
+        // 3. block hash
+        for (i, (orig_block, recon_block)) in test_chain
+            .blocks
+            .iter()
+            .zip(new_chain.blocks.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                orig_block.calculate_hash().unwrap(),
+                recon_block.calculate_hash().unwrap(),
+                "Block hash mismatch at height {}",
+                i
+            );
+        }
     }
 }

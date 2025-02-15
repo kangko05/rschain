@@ -188,6 +188,7 @@ impl Transaction {
         Ok(fee)
     }
 
+    /// to = miner address
     pub fn coinbase(to: &str, block_height: u64) -> TxResult<Self> {
         let mut tx = Transaction {
             id: vec![],

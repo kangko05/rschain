@@ -24,7 +24,7 @@ impl Display for MerkleError {
 
 pub type MerkleResult<T> = Result<T, MerkleError>;
 
-// block errors
+// block errors - this contains tx error inside
 #[derive(Debug)]
 pub enum BlockError {
     Message(String),
@@ -36,11 +36,18 @@ pub enum BlockError {
     SystemTimeError(SystemTimeError),
     MerkleError(MerkleError),
     SerializeError(bincode::Error),
+    TxError(TxError),
 }
 
 impl BlockError {
     pub fn from_str(msg: &str) -> Self {
         Self::Message(msg.to_string())
+    }
+}
+
+impl From<TxError> for BlockError {
+    fn from(value: TxError) -> Self {
+        Self::TxError(value)
     }
 }
 
@@ -74,6 +81,7 @@ impl Display for BlockError {
             Self::SystemTimeError(err) => write!(f, "failed to get current time: {}", err),
             Self::MerkleError(merr) => write!(f, "{}", merr),
             Self::SerializeError(serr) => write!(f, "{}", serr),
+            Self::TxError(err) => write!(f, "{}", err),
         }
     }
 }
