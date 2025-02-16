@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::error::Error;
 use std::fmt::Display;
 use std::io;
 
@@ -7,6 +8,7 @@ use std::io;
 pub enum NetError {
     Str(String),
     IoErr(io::Error),
+    SerdeJsonErr(serde_json::Error),
 }
 
 impl NetError {
@@ -21,13 +23,22 @@ impl From<io::Error> for NetError {
     }
 }
 
+impl From<serde_json::Error> for NetError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::SerdeJsonErr(value)
+    }
+}
+
 impl Display for NetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Str(s) => write!(f, "{}", s),
             Self::IoErr(err) => write!(f, "{}", err),
+            Self::SerdeJsonErr(err) => write!(f, "{}", err),
         }
     }
 }
+
+impl Error for NetError {}
 
 pub type NetResult<T> = Result<T, NetError>;

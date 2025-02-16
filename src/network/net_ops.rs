@@ -1,12 +1,19 @@
 #![allow(dead_code)]
 
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::network::errors::NetError;
 
 use super::errors::NetResult;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum NetMessage {
+    GetPeers,
+}
 
 /// Network Operations for nodes
 /// - setup listener -> channel -> parse -> handle meesage in node
@@ -14,20 +21,47 @@ use super::errors::NetResult;
 pub struct NetOps;
 
 impl NetOps {
-    pub async fn listen(addr: &str, tx: mpsc::Sender<Vec<u8>>) -> NetResult<()> {
-        let listener = TcpListener::bind(addr).await?;
+    pub fn listen(addr: &str, tx: mpsc::Sender<NetMessage>) -> JoinHandle<()> {
+        let node_addr = addr.to_string();
 
-        let (mut stream, _) = listener.accept().await?;
-        let payload = Self::read_stream(&mut stream).await?;
+        tokio::spawn(async move {
+            let listener = match TcpListener::bind(&node_addr).await {
+                Ok(listener) => listener,
+                Err(err) => {
+                    eprintln!("Failed to bind: {err}");
+                    return;
+                }
+            };
 
-        let msg = String::from_utf8_lossy(&payload);
-
-        println!("received: {msg}");
-
-        Ok(())
+            Self::handle_connections(listener, tx).await;
+        })
     }
 
-    async fn read_stream(stream: &mut TcpStream) -> NetResult<Vec<u8>> {
+    async fn handle_connections(listener: TcpListener, tx: mpsc::Sender<NetMessage>) {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    Self::spawn_connection_handler(stream, tx.clone()).await;
+                }
+                Err(err) => eprintln!("Accept error: {err}"),
+            }
+        }
+    }
+
+    async fn spawn_connection_handler(stream: TcpStream, tx: mpsc::Sender<NetMessage>) {
+        match Self::read_stream(stream).await {
+            Ok(buf) => {
+                let msg = serde_json::from_slice::<NetMessage>(&buf).unwrap();
+
+                if let Err(err) = tx.send(msg).await {
+                    eprintln!("Failed to send message to handler: {err}");
+                }
+            }
+            Err(err) => eprintln!("Stream read error: {err}"),
+        }
+    }
+
+    async fn read_stream(mut stream: TcpStream) -> NetResult<Vec<u8>> {
         // read length ->  read payload
         let mut len_buf = [0u8; 4];
         if stream.read_exact(&mut len_buf).await.is_ok() {
@@ -45,14 +79,15 @@ impl NetOps {
 
 #[cfg(test)]
 mod netops_test {
+    use serde_json::json;
     use tokio::io::AsyncWriteExt;
     use tokio::sync::mpsc;
 
     use super::*;
 
-    async fn send_str(msg: &str) {
-        let msg_bytes = msg.as_bytes();
-        let msg_len = (msg_bytes.len() as u32).to_be_bytes();
+    async fn send_msg() {
+        let msg = serde_json::to_vec(&json!(NetMessage::GetPeers)).unwrap();
+        let msg_len = (msg.len() as u32).to_be_bytes();
 
         let mut stream = TcpStream::connect("127.0.0.1:8000")
             .await
@@ -64,26 +99,30 @@ mod netops_test {
             .expect("failed to write msg len");
 
         stream
-            .write_all(msg_bytes)
+            .write_all(&msg)
             .await
             .expect("failed to write msg bytes");
     }
 
     #[tokio::test]
     async fn listen() {
-        let (tx, _) = mpsc::channel(32);
+        let (tx, mut rx) = mpsc::channel(32);
 
-        let listen_handle = tokio::spawn(async move {
-            NetOps::listen("127.0.0.1:8000", tx)
-                .await
-                .map_err(|err| eprintln!("{err}"))
-                .expect("failed listening");
-        });
+        let listen_handle = NetOps::listen("127.0.0.1:8000", tx);
+
+        println!("abc");
 
         let send_handle = tokio::spawn(async move {
-            send_str("hello, world!").await;
+            send_msg().await;
         });
 
-        let _ = tokio::join!(listen_handle, send_handle);
+        let thandle = tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                // handle messages here
+                dbg!(msg);
+            }
+        });
+
+        let _ = tokio::try_join!(listen_handle, send_handle, thandle);
     }
 }
