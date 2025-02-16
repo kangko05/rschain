@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, unused)]
 
 mod block;
 mod chain;
@@ -9,6 +9,6 @@ mod tx_pool;
 
 pub use block::Block;
 pub use chain::Chain;
-pub use errors::{BlockResult, MerkleError, MerkleResult};
+pub use errors::{MerkleError, MerkleResult};
 pub use merkle_tree::MerkleTree;
 pub use transaction::Transaction;

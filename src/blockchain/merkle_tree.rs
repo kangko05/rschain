@@ -23,19 +23,19 @@ struct MerkleLevelChain {
 }
 
 impl MerkleLevelChain {
-    fn new(nodes: &Vec<Vec<u8>>) -> Self {
+    fn new(nodes: &[Vec<u8>]) -> Self {
         Self {
             next_level: None,
-            nodes: nodes.clone(),
+            nodes: nodes.to_vec(),
         }
     }
 
-    fn build_chain(hashes: &Vec<Vec<u8>>) -> MerkleResult<(MerkleLevelChain, Vec<u8>)> {
-        if hashes.len() < 1 {
+    fn build_chain(hashes: &[Vec<u8>]) -> MerkleResult<(MerkleLevelChain, Vec<u8>)> {
+        if hashes.is_empty() {
             return Err(MerkleError::err("need more than 1 hashes")); // error
         }
 
-        let mut leaf_hashes = hashes.clone();
+        let mut leaf_hashes = hashes.to_vec();
         let leaf_count = leaf_hashes.len();
 
         if leaf_count % 2 == 1 {
@@ -139,7 +139,7 @@ impl MerkleLevelChain {
         println!();
 
         match &self.next_level {
-            None => return,
+            None => (),
             Some(next) => next.print(),
         }
     }
@@ -156,7 +156,7 @@ impl MerkleLevelChain {
         }
     }
 
-    fn get_parent_hash(left: &Vec<u8>, right: &Vec<u8>) -> Vec<u8> {
+    fn get_parent_hash(left: &[u8], right: &[u8]) -> Vec<u8> {
         let mut combined = Vec::with_capacity(left.len() + right.len());
         combined.extend_from_slice(left);
         combined.extend_from_slice(right);
@@ -171,7 +171,7 @@ pub struct MerkleTree {
 }
 
 impl MerkleTree {
-    pub fn build(hashes: &Vec<Vec<u8>>) -> MerkleResult<Self> {
+    pub fn build(hashes: &[Vec<u8>]) -> MerkleResult<Self> {
         let leaf_count = hashes.len();
         let (level_chain, root) = MerkleLevelChain::build_chain(hashes)?;
 
@@ -218,8 +218,8 @@ mod merkle_tests {
 
         let (mtl, root) = MerkleLevelChain::build_chain(&tcs).unwrap();
 
-        for i in 0..tcs.len() {
-            assert!(mtl.verify(&tcs[i]), "failed at {i}");
+        for (i, tc) in tcs.iter().enumerate() {
+            assert!(mtl.verify(tc), "failed at {i}");
         }
 
         assert!(mtl.get_root() == root);
@@ -232,8 +232,8 @@ mod merkle_tests {
 
         let mt = MerkleTree::build(&tcs).unwrap();
 
-        for i in 0..tcs.len() {
-            assert!(mt.verify(&tcs[i]), "failed at {i}");
+        for (i, tc) in tcs.iter().enumerate() {
+            assert!(mt.verify(tc), "failed at {i}");
         }
     }
 

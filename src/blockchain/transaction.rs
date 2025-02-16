@@ -174,7 +174,7 @@ impl Transaction {
         let public_key = PublicKey::from_str(wallet.get_pub_key()).unwrap();
 
         for input in &mut tx.inputs {
-            let input_sign = Self::sign(&msg, &wallet)?;
+            let input_sign = Self::sign(&msg, wallet)?;
             secp.verify_ecdsa(&msg, &input_sign, &public_key)?;
             input.signature = Some(input_sign.to_string());
         }
@@ -255,7 +255,7 @@ impl Transaction {
 
     // to check if its a coinbase
     pub fn is_coinbase(&self) -> bool {
-        self.inputs.len() == 0
+        self.inputs.is_empty()
     }
 
     // same as get hash
@@ -282,7 +282,8 @@ impl Transaction {
 #[cfg(test)]
 mod tx_tests {
     use super::*;
-    use crate::block::{chain::Chain, Block};
+    use crate::blockchain::Block;
+    use crate::blockchain::Chain;
 
     #[test]
     fn coinbase() {
@@ -309,7 +310,7 @@ mod tx_tests {
         let mut chain = Chain::new();
         let tx1 = Transaction::coinbase(addr1, chain.get_block_height()).unwrap();
         let mut genesis =
-            Block::new("genesis", &vec![tx1.clone()]).expect("failed to create a genesis block");
+            Block::new("genesis", &[tx1.clone()]).expect("failed to create a genesis block");
 
         genesis.mine().expect("failed to mine the block");
 
@@ -331,11 +332,8 @@ mod tx_tests {
 
         dbg!(tx3.clone());
 
-        let mut blk1 = Block::new(
-            &chain.get_last_block_hash_string().unwrap(),
-            &vec![tx2, tx3],
-        )
-        .unwrap();
+        let mut blk1 =
+            Block::new(&chain.get_last_block_hash_string().unwrap(), &[tx2, tx3]).unwrap();
         blk1.mine().unwrap();
 
         chain.add_blk(&blk1).unwrap();
@@ -355,7 +353,7 @@ mod tx_tests {
         // first block
         println!("height: {}", chain.get_block_height());
         let tx1 = Transaction::coinbase(wallet1.get_address(), chain.get_block_height()).unwrap();
-        let mut genesis_blk = Block::new("genesis", &vec![tx1.clone()]).unwrap();
+        let mut genesis_blk = Block::new("genesis", &[tx1.clone()]).unwrap();
 
         genesis_blk.mine().unwrap();
         chain.genesis(&genesis_blk).unwrap();
@@ -363,14 +361,11 @@ mod tx_tests {
         // second block
         println!("height: {}", chain.get_block_height());
         let tx2 = Transaction::coinbase(wallet1.get_address(), chain.get_block_height()).unwrap();
-        let mut blk = Block::new(
-            &chain.get_last_block_hash_string().unwrap(),
-            &vec![tx2.clone()],
-        )
-        .unwrap();
+        let mut blk =
+            Block::new(&chain.get_last_block_hash_string().unwrap(), &[tx2.clone()]).unwrap();
 
-        println!("tx1: {}", utils::hash_to_string(&tx1.get_id()));
-        println!("tx2: {}", utils::hash_to_string(&tx2.get_id()));
+        println!("tx1: {}", utils::hash_to_string(tx1.get_id()));
+        println!("tx2: {}", utils::hash_to_string(tx2.get_id()));
 
         blk.mine().unwrap();
         chain.add_blk(&blk).unwrap();

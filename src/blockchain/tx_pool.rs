@@ -39,7 +39,7 @@ impl TxPool {
     }
 
     pub fn get_one(&mut self) -> TxpoolResult<Transaction> {
-        if self.pool.len() < 1 {
+        if self.pool.is_empty() {
             return Err(TxpoolError::IndexOutOfBound);
         }
 

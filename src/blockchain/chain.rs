@@ -37,9 +37,9 @@ impl Chain {
 
         let blocks_len = blocks.len();
 
-        for i in 1..blocks_len {
-            chain.add_blk(&blocks[i])?;
-            chain.add_utxos(&blocks[i])?;
+        for block in blocks.iter().take(blocks_len).skip(1) {
+            chain.add_blk(block)?;
+            chain.add_utxos(block)?;
         }
 
         chain.blocks = blocks;
@@ -138,7 +138,8 @@ impl Chain {
     // TODO: do i need to return the whole transaction? or do i even need this?
     pub fn get_address_utxos(&self, address: &str) -> Vec<TxOutput> {
         let mut utxos = vec![];
-        for (_, txout) in &self.utxos {
+
+        for txout in self.utxos.values() {
             if txout.get_address() == address {
                 utxos.push(txout.clone());
             }
@@ -149,7 +150,7 @@ impl Chain {
 
     pub fn get_address_total_value(&self, address: &str) -> u64 {
         let mut total = 0;
-        for (_, txout) in &self.utxos {
+        for txout in self.utxos.values() {
             if txout.get_address() == address {
                 total += txout.get_value();
             }
@@ -200,7 +201,7 @@ impl Chain {
 mod chain_tests {
     use rand::Rng;
 
-    use crate::{block::errors::TxResult, wallet::Wallet};
+    use crate::{blockchain::errors::TxResult, wallet::Wallet};
 
     use super::*;
 
@@ -208,7 +209,7 @@ mod chain_tests {
     fn gen_test_txs(
         chain: &Chain,
         sending_wallet: &Wallet,
-        wallets: &Vec<Wallet>,
+        wallets: Vec<Wallet>,
     ) -> TxResult<(Wallet, Vec<Transaction>)> {
         // random tx
         let mut rng = rand::thread_rng();
@@ -230,7 +231,7 @@ mod chain_tests {
 
             let utxos = chain.get_utxos();
             let outputs = chain.get_address_txs(sending_wallet.get_address());
-            let tx = Transaction::new(&utxos, &sending_wallet, outputs, &to_address, random_value)?;
+            let tx = Transaction::new(utxos, sending_wallet, outputs, to_address, random_value)?;
 
             txs.push(tx);
         }
@@ -262,7 +263,7 @@ mod chain_tests {
         // random txs
         let mut sent_wallet = genesis_wallet;
         for _ in 0..10 {
-            let (wallet, txs) = gen_test_txs(&chain, &sent_wallet, &wallets)?;
+            let (wallet, txs) = gen_test_txs(&chain, &sent_wallet, wallets.clone())?;
             sent_wallet = wallet;
 
             let mut new_block = Block::new(&chain.get_last_block_hash_string()?, &txs)?;
@@ -284,8 +285,7 @@ mod chain_tests {
 
         let tx = Transaction::coinbase("first transaction", chain.get_block_height())
             .expect("failed to create a tx");
-        let mut genesis_blk =
-            Block::new("genesis", &vec![tx]).expect("failed to create a new block");
+        let mut genesis_blk = Block::new("genesis", &[tx]).expect("failed to create a new block");
 
         genesis_blk.mine().unwrap();
 
@@ -295,7 +295,7 @@ mod chain_tests {
 
         let tx2 = Transaction::coinbase("second transaction", chain.get_block_height())
             .expect("failed to create a tx");
-        let mut new_blk = Block::new(&chain.get_last_block_hash_string().unwrap(), &vec![tx2])
+        let mut new_blk = Block::new(&chain.get_last_block_hash_string().unwrap(), &[tx2])
             .expect("failed to create a new block");
 
         new_blk.mine().unwrap();

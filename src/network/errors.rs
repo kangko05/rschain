@@ -1,60 +1,33 @@
 #![allow(dead_code)]
 
-use std::{error::Error, fmt::Display, net::AddrParseError};
-
-use tokio::{io, task::JoinError};
+use std::fmt::Display;
+use std::io;
 
 #[derive(Debug)]
-pub enum NetworkError {
-    String(String),
-    IoError(io::Error),
-    AddrParseError(AddrParseError),
-    JoinHandleError(JoinError),
-    SerdeJsonError(serde_json::Error),
+pub enum NetError {
+    Str(String),
+    IoErr(io::Error),
 }
 
-impl NetworkError {
-    pub fn str(s: &str) -> Self {
-        Self::String(s.to_string())
+impl NetError {
+    pub fn str(msg: &str) -> Self {
+        Self::Str(msg.to_string())
     }
 }
 
-impl From<JoinError> for NetworkError {
-    fn from(value: JoinError) -> Self {
-        Self::JoinHandleError(value)
-    }
-}
-
-impl From<AddrParseError> for NetworkError {
-    fn from(value: AddrParseError) -> Self {
-        Self::AddrParseError(value)
-    }
-}
-
-impl From<io::Error> for NetworkError {
+impl From<io::Error> for NetError {
     fn from(value: io::Error) -> Self {
-        Self::IoError(value)
+        Self::IoErr(value)
     }
 }
 
-impl From<serde_json::Error> for NetworkError {
-    fn from(value: serde_json::Error) -> Self {
-        Self::SerdeJsonError(value)
-    }
-}
-
-impl Display for NetworkError {
+impl Display for NetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::String(s) => write!(f, "{}", s),
-            Self::IoError(err) => write!(f, "{}", err),
-            Self::AddrParseError(err) => write!(f, "{}", err),
-            Self::JoinHandleError(err) => write!(f, "{}", err),
-            Self::SerdeJsonError(err) => write!(f, "{}", err),
+            Self::Str(s) => write!(f, "{}", s),
+            Self::IoErr(err) => write!(f, "{}", err),
         }
     }
 }
 
-impl Error for NetworkError {}
-
-pub type NetworkResult<T> = Result<T, NetworkError>;
+pub type NetResult<T> = Result<T, NetError>;

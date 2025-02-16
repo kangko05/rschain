@@ -66,7 +66,7 @@ impl Serialize for Block {
 }
 
 impl Block {
-    pub fn new(previous_hash: &str, transactions: &Vec<Transaction>) -> BlockResult<Self> {
+    pub fn new(previous_hash: &str, transactions: &[Transaction]) -> BlockResult<Self> {
         // hash transactions
         let transactions = transactions.to_vec();
         let hashes = transactions
@@ -112,7 +112,7 @@ impl Block {
     }
 
     /// checks if it satisfies difficulty (if hash string starts with # of diff 0s)
-    fn is_valid_hash(&self, hash: &Vec<u8>) -> bool {
+    fn is_valid_hash(&self, hash: &[u8]) -> bool {
         let hash_str = utils::hash_to_string(hash);
         let difficulty = self.header.difficulty as usize;
         "0".repeat(difficulty) == hash_str[..difficulty]
@@ -164,9 +164,9 @@ impl Block {
         match self.transactions.first() {
             Some(tx) => {
                 if !tx.is_coinbase() {
-                    return Err(BlockError::from_str("failed to find coinbase tx"));
+                    Err(BlockError::from_str("failed to find coinbase tx"))
                 } else {
-                    return Ok(tx.clone());
+                    Ok(tx.clone())
                 }
             }
             None => Err(BlockError::from_str("block has no transactions")),
@@ -174,7 +174,7 @@ impl Block {
     }
 
     pub fn get_transactions(&self) -> BlockResult<&Vec<Transaction>> {
-        if self.transactions.len() == 0 {
+        if self.transactions.is_empty() {
             return Err(BlockError::from_str("empty transactions"));
         }
 
@@ -203,20 +203,19 @@ mod block_tests {
 
     #[test]
     fn new_block() {
-        let blk =
-            Block::new("coinbase", &vec![test_tx("coinbase")]).expect("failed to build a block");
+        let blk = Block::new("coinbase", &[test_tx("coinbase")]).expect("failed to build a block");
         dbg!(blk);
     }
 
     #[test]
     fn get_hash() {
-        let block = Block::new("", &vec![test_tx("coinbase")]).unwrap();
+        let block = Block::new("", &[test_tx("coinbase")]).unwrap();
         dbg!(utils::hash_to_string(&block.calculate_hash().unwrap()));
     }
 
     #[test]
     fn mine() {
-        let mut block = Block::new("genesis", &vec![test_tx("coinbase")]).unwrap();
+        let mut block = Block::new("genesis", &[test_tx("coinbase")]).unwrap();
         let hash = block.mine().unwrap();
 
         assert!(block.is_valid_hash(&hash));
@@ -224,11 +223,11 @@ mod block_tests {
 
     #[test]
     fn validate() {
-        let mut blk1 = Block::new("", &vec![test_tx("first")]).expect("failed to create a block");
+        let mut blk1 = Block::new("", &[test_tx("first")]).expect("failed to create a block");
         blk1.mine().unwrap();
         let blk1_hash = utils::hash_to_string(&blk1.calculate_hash().unwrap());
         let mut blk2 =
-            Block::new(&blk1_hash, &vec![test_tx("second")]).expect("failed to create a block");
+            Block::new(&blk1_hash, &[test_tx("second")]).expect("failed to create a block");
 
         blk2.mine().unwrap();
 
@@ -237,11 +236,11 @@ mod block_tests {
 
     #[test]
     fn validate_wrong_prev_hash() {
-        let mut blk1 = Block::new("", &vec![test_tx("first")]).expect("failed to create a block");
+        let mut blk1 = Block::new("", &[test_tx("first")]).expect("failed to create a block");
         blk1.mine().unwrap();
         let wrong_hash = "totally_wrong_hash";
         let mut blk2 =
-            Block::new(wrong_hash, &vec![test_tx("second")]).expect("failed to create a block");
+            Block::new(wrong_hash, &[test_tx("second")]).expect("failed to create a block");
         blk2.mine().unwrap();
 
         assert!(matches!(
@@ -255,11 +254,11 @@ mod block_tests {
 
     #[test]
     fn validate_wrong_timestamp() {
-        let mut blk1 = Block::new("", &vec![test_tx("first")]).expect("failed to create a block");
+        let mut blk1 = Block::new("", &[test_tx("first")]).expect("failed to create a block");
         blk1.mine().unwrap();
         let blk1_hash = utils::hash_to_string(&blk1.calculate_hash().unwrap());
         let mut blk2 =
-            Block::new(&blk1_hash, &vec![test_tx("second")]).expect("failed to create a block");
+            Block::new(&blk1_hash, &[test_tx("second")]).expect("failed to create a block");
         blk2.mine().unwrap();
 
         assert!(matches!(

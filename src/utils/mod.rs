@@ -20,8 +20,11 @@ pub fn next_power_of_two(n: usize) -> usize {
     1 << (usize::BITS - n.leading_zeros())
 }
 
-pub fn hash_to_string(hash: &Vec<u8>) -> String {
-    hash.iter().map(|&by| format!("{:02x}", by)).collect()
+pub fn hash_to_string(hash: &[u8]) -> String {
+    hash.iter()
+        .fold(String::new(), |acc, &by| format!("{}{:02x}", acc, by))
+
+    //hash.iter().map(|&by| format!("{:02x}", by)).collect()
 }
 
 pub fn unixtime_now() -> Result<u64, SystemTimeError> {
@@ -36,5 +39,11 @@ mod hash_test {
     fn hash() {
         let res = sha256("hello world!".as_bytes());
         assert!(res.len() == 32)
+    }
+
+    #[test]
+    fn hash_to_str() {
+        let s = "hello world".as_bytes();
+        println!("{}", hash_to_string(s));
     }
 }
