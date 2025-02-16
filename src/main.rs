@@ -6,7 +6,7 @@ use tokio::{
     net::TcpStream,
 };
 
-use network::{NetworkMessage, Node};
+use network::{BootstrapNode, FullNode, NetworkMessage, NetworkResult, Node, NodeOperation};
 
 mod block;
 mod network;
@@ -22,12 +22,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .to_string();
 
     match arg.as_str() {
+        "bootstrap" => {
+            if let Err(err) = run_bootstrap().await {
+                panic!("{err}");
+            }
+        }
+
+        "full" => {
+            if let Err(err) = run_full().await {
+                panic!("{err}");
+            }
+        }
+
         "client" => run_client().await,
         "server" => run_server().await,
         _ => panic!("burn in fire"),
     }
 
     Ok(())
+}
+
+async fn run_bootstrap() -> NetworkResult<()> {
+    let mut bootstrap_node = BootstrapNode::new();
+    bootstrap_node.run().await
+}
+
+async fn run_full() -> NetworkResult<()> {
+    let mut full_node = FullNode::new(8003, "127.0.0.1:8333");
+    full_node.run().await
 }
 
 async fn run_client() {

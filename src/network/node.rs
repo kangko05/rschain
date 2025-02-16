@@ -26,6 +26,8 @@ pub enum NetworkMessage {
     Pong,
 
     GetChain,
+    AddMeToPeer(String),
+    None,
 }
 
 impl NetworkMessage {
@@ -80,6 +82,8 @@ impl Node {
     pub async fn test_run(&mut self) -> NetworkResult<()> {
         let (tx, rx) = mpsc::channel::<ChanMessageType>(32);
 
+        // TODO: initialize peers&chain by asking to another peer node
+
         let listen_handle = self.listen(tx)?;
         let message_handle = self.handle_basic_messages(rx, None);
         let ping_handle = self.ping();
@@ -92,6 +96,45 @@ impl Node {
         };
 
         Ok(())
+    }
+
+    pub async fn init_peers(&mut self, peer_addr: &str) -> NetworkResult<()> {
+        // add me to peer
+        let socket = TcpSocket::new_v4()?;
+        let stream = socket.connect(peer_addr.parse()?).await?;
+        let add_peer_msg = serde_json::to_vec(&json!(NetworkMessage::AddMeToPeer(
+            self.socket_string.clone()
+        )))?;
+        let stream = Self::write_message(add_peer_msg, stream).await?;
+        let (resp, _) = Self::read_stream(stream).await?;
+        if String::from_utf8_lossy(&resp) != "ok" {
+            return Err(NetworkError::str("failed to be added as peer"));
+        }
+
+        // getaddr
+        let stream = TcpStream::connect(peer_addr).await?;
+        let getaddr_msg = serde_json::to_vec(&json!(NetworkMessage::GetAddr))?;
+        let stream = Self::write_message(getaddr_msg, stream).await?;
+        let (resp, stream) = Self::read_stream(stream).await?;
+        let resp = serde_json::from_slice::<NetworkMessage>(&resp)?;
+
+        if let NetworkMessage::GetAddrResp(r) = resp {
+            for addr in r.iter() {
+                if addr == &self.socket_string {
+                    continue;
+                }
+
+                if let Err(err) = self.connect_to_peer(addr).await {
+                    eprintln!("{err}");
+                }
+            }
+
+            Self::add_peers(&self.peers, peer_addr, stream).await;
+
+            Ok(())
+        } else {
+            Err(NetworkError::str("failed to get peer list"))
+        }
     }
 
     pub fn listen(&mut self, tx: mpsc::Sender<ChanMessageType>) -> NetworkResult<JoinHandle<()>> {
@@ -152,47 +195,64 @@ impl Node {
                     }
                 };
 
-                let processed =
-                    Self::process_message(net_msg.clone(), &peers, &pong_resps, &addr).await;
+                let (msg_type, processed) = Self::process_message(net_msg.clone(), &peers).await;
 
-                let Some(processed) = processed else {
-                    eprintln!("message processing failed");
-                    continue;
-                };
-
-                if processed.is_empty() {
-                    if let Some(tx) = &ext_tx {
-                        if let Err(err) = tx.send((net_msg, addr.to_string(), stream)).await {
-                            eprintln!("failed to forward message to extended handler: {}", err);
-                        }
-                    } else {
-                        eprintln!("received message for extended handler but no handle available ");
-                    }
-                } else {
-                    let stream = match Self::write_response(processed, stream).await {
-                        Ok(stream) => stream,
-                        Err(err) => {
-                            eprintln!("failed to send the response: {}", err);
+                match msg_type {
+                    NetworkMessage::GetAddr | NetworkMessage::Ping => {
+                        let Some(processed) = processed else {
+                            eprintln!("message processing failed");
                             continue;
+                        };
+
+                        if let Err(err) = Self::write_message(processed, stream).await {
+                            eprintln!("failed to send a response: {}", err);
+                        };
+                    }
+
+                    NetworkMessage::Pong => {
+                        let mut pong_resps_guard = pong_resps.lock().await;
+                        pong_resps_guard.push(addr.to_string());
+                    }
+
+                    NetworkMessage::AddMeToPeer(s) => {
+                        println!("adding {s} to peers");
+
+                        let Ok(stream) = Self::write_message_ok(stream).await else {
+                            eprintln!("failed to write response");
+                            continue;
+                        };
+
+                        Self::add_peers(&peers, &s, stream).await;
+                    }
+
+                    NetworkMessage::None => continue,
+
+                    _ => {
+                        if let Some(tx) = &ext_tx {
+                            if let Err(err) = tx.send((net_msg, addr.to_string(), stream)).await {
+                                eprintln!("failed to forward message to ext handler: {}", err);
+                            };
+                        } else {
+                            eprintln!(
+                                "received message for extended handler but no handle available"
+                            );
                         }
-                    };
-
-                    Self::add_peers(&peers, &addr, stream).await;
-
-                    dbg!(&peers);
+                    }
                 }
             }
         })
     }
 
-    pub async fn connect_to_peer(&mut self, addr: String) -> NetworkResult<()> {
+    pub async fn connect_to_peer(&mut self, addr: &str) -> NetworkResult<()> {
         let socket = TcpSocket::new_v4()?;
         socket.set_keepalive(true)?;
 
         let stream = socket.connect(addr.parse()?).await?;
         let addr = stream.peer_addr()?.to_string();
+
         let mut peers_guard = self.peers.lock().await;
         peers_guard.insert(addr, stream);
+        dbg!(&peers_guard);
 
         Ok(())
     }
@@ -235,9 +295,16 @@ impl Node {
     pub async fn add_peers(peers: &PeersMapType, addr: &str, stream: TcpStream) {
         let mut peers_guard = peers.lock().await;
         peers_guard.insert(addr.to_string(), stream);
+        dbg!(&peers_guard);
     }
 
-    pub async fn write_response(msg: Vec<u8>, mut stream: TcpStream) -> NetworkResult<TcpStream> {
+    // simply writes 'ok' for response
+    pub async fn write_message_ok(stream: TcpStream) -> NetworkResult<TcpStream> {
+        let msg = "ok".as_bytes();
+        Self::write_message(msg.into(), stream).await
+    }
+
+    pub async fn write_message(msg: Vec<u8>, mut stream: TcpStream) -> NetworkResult<TcpStream> {
         // get length
         let msg_len = (msg.len() as u32).to_be_bytes();
 
@@ -248,15 +315,19 @@ impl Node {
     }
 
     /// read stream -> &[u8]
-    async fn read_stream(stream: TcpStream) -> NetworkResult<(Vec<u8>, TcpStream)> {
+    pub async fn read_stream(stream: TcpStream) -> NetworkResult<(Vec<u8>, TcpStream)> {
         let mut length_buf = [0u8; 4];
         let mut stream = stream;
+
+        // TODO: remove this line
+        let addr = stream.peer_addr().unwrap();
 
         if let Ok(n) = stream.read_exact(&mut length_buf).await {
             if n == 0 {
                 // TODO
                 // disconnected
                 // try reconnecting? or leave it as it is
+                println!("peer disconnected: {}", addr);
             }
 
             let length = u32::from_be_bytes(length_buf);
@@ -279,31 +350,30 @@ impl Node {
     async fn process_message(
         msg: NetworkMessage,
         peers: &PeersMapType,
-        pong_resps: &Arc<Mutex<Vec<String>>>,
-        addr: &str,
-    ) -> Option<Vec<u8>> {
+    ) -> (NetworkMessage, Option<Vec<u8>>) {
         match msg {
             NetworkMessage::GetAddr => {
                 println!("get addr!");
-                return Self::getaddr_resp_json(peers).await.ok();
+                return (
+                    NetworkMessage::GetAddr,
+                    Self::getaddr_resp_json(peers).await.ok(),
+                );
             }
 
             NetworkMessage::Ping => {
                 println!("ping!");
-                return serde_json::to_vec(&json!(NetworkMessage::Pong)).ok();
+                return (
+                    NetworkMessage::Ping,
+                    serde_json::to_vec(&json!(NetworkMessage::Pong)).ok(),
+                );
             }
 
-            NetworkMessage::Pong => {
-                println!("pong!");
-                let mut pong_resps_guard = pong_resps.lock().await;
-                pong_resps_guard.push(addr.to_string());
-                return Some(vec![]);
-            }
-
-            _ => println!("ignoring for now"),
+            //NetworkMessage::GetAddrResp(resp) => {
+            //    println!("get addr resp!");
+            //    dbg!(resp);
+            //}
+            _ => return (msg, None),
         }
-
-        None
     }
 
     async fn getaddr_resp_json(peers: &Arc<Mutex<PeerType>>) -> NetworkResult<Vec<u8>> {
@@ -313,7 +383,13 @@ impl Node {
             .map(|key| key.to_string())
             .collect::<Vec<String>>();
 
-        Ok(serde_json::to_vec(&json!(resp))?)
+        Ok(serde_json::to_vec(&json!(NetworkMessage::GetAddrResp(
+            resp
+        )))?)
+    }
+
+    pub fn get_socket_addr(&self) -> String {
+        self.socket_string.to_string()
     }
 }
 

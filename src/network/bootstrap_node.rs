@@ -49,11 +49,6 @@ impl BootstrapNode {
 
 impl NodeOperation for BootstrapNode {
     async fn run(&mut self) -> NetworkResult<()> {
-        // TODO: below
-        // 1. create genesis block
-        // 2. start the chain
-        // 3. listen to peers
-
         println!("running bootstrap node");
 
         let (tx, rx) = mpsc::channel::<ChanMessageType>(32);
@@ -84,15 +79,16 @@ impl BootstrapNode {
         mut rx: mpsc::Receiver<(NetworkMessage, String, TcpStream)>,
     ) -> JoinHandle<()> {
         let peers = Arc::clone(self.node.get_peers_map());
+        let blocks = self.chain.get_blocks().clone();
 
         tokio::spawn(async move {
             while let Some((msg, addr, stream)) = rx.recv().await {
-                let Some(processed) = Self::process_message(msg) else {
+                let Some(processed) = Self::process_message(msg, &blocks) else {
                     eprintln!("failed to process message",);
                     continue;
                 };
 
-                let stream = match Node::write_response(processed, stream).await {
+                let stream = match Node::write_message(processed, stream).await {
                     Ok(stream) => stream,
                     Err(err) => {
                         eprintln!("failed to send response: {}", err);
@@ -106,28 +102,15 @@ impl BootstrapNode {
     }
 
     /// process NetworkMessage ->  Vec<u8>
-    fn process_message(msg: NetworkMessage) -> Option<Vec<u8>> {
+    fn process_message(msg: NetworkMessage, blocks: &Vec<Block>) -> Option<Vec<u8>> {
         match msg {
-            // TODO: should return chain
-            NetworkMessage::GetChain => serde_json::to_vec(&json!(msg)).ok(),
+            NetworkMessage::GetChain => {
+                let blocks = blocks.clone();
+                return serde_json::to_vec(&json!(blocks))
+                    .map_err(|err| eprintln!("failed to serialize block: {}", err))
+                    .ok();
+            }
             _ => None,
         }
     }
 }
-
-//#[cfg(test)]
-//mod bootstrap_node_tests {
-//    use super::*;
-//
-//    #[test]
-//    fn new() {
-//        let bnode = BootstrapNode::new();
-//        dbg!(bnode);
-//    }
-//
-//    #[tokio::test]
-//    async fn run() {
-//        let mut btnode = BootstrapNode::new();
-//        let _ = btnode.run().await;
-//    }
-//}

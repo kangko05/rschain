@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
-use secp256k1::{ecdsa::Signature, Message, PublicKey, Secp256k1};
-use serde::{ser::SerializeStruct, Serialize};
+use secp256k1::{ecdsa::Signature, Message, PublicKey, Secp256k1, SecretKey};
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
 
 use crate::{utils, wallet::Wallet};
 
@@ -23,12 +23,12 @@ use super::errors::{TxError, TxResult};
 const MINING_REWARD: u64 = 5_000_000_000;
 const FEE_RATE: u64 = 20;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct TxInput {
     tx_id: Vec<u8>, // tx if for outputs (which one to use)
     output_index: u32,
-    signature: Option<Signature>,
-    public_key: PublicKey,
+    signature: Option<String>,
+    public_key: String,
 }
 
 impl TxInput {
@@ -49,18 +49,26 @@ impl Serialize for TxInput {
         let mut state = serializer.serialize_struct("TxInput", 0)?;
         state.serialize_field("tx_id", &self.tx_id)?;
         state.serialize_field("output_index", &self.output_index)?;
-        match self.signature {
-            Some(signature) => {
-                state.serialize_field("signature", &signature.serialize_compact().to_vec())?
-            }
-            None => state.serialize_field("signature", &Vec::<u8>::new())?,
+
+        match &self.signature {
+            Some(signature) => state.serialize_field("signature", &signature)?,
+            None => state.serialize_field("signature", "")?,
         }
-        state.serialize_field("public_key", &self.public_key.serialize().to_vec())?;
+
+        state.serialize_field("public_key", &self.public_key)?;
+
+        //match self.signature {
+        //    Some(signature) => {
+        //        state.serialize_field("signature", &signature.serialize_compact().to_vec())?
+        //    }
+        //    None => state.serialize_field("signature", &Vec::<u8>::new())?,
+        //}
+        //state.serialize_field("public_key", &self.public_key.serialize().to_vec())?;
         state.end()
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct TxOutput {
     value: u64,
     address: String,
@@ -94,7 +102,7 @@ impl Serialize for TxOutput {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Transaction {
     id: Vec<u8>, // hash
     inputs: Vec<TxInput>,
@@ -108,11 +116,12 @@ impl Serialize for Transaction {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("Transaction", 4)?;
+        let mut state = serializer.serialize_struct("Transaction", 5)?;
         state.serialize_field("id", &self.id)?;
         state.serialize_field("inputs", &self.inputs)?;
         state.serialize_field("outputs", &self.outputs)?;
         state.serialize_field("block_height", &self.block_height)?;
+        state.serialize_field("fee", &self.fee)?;
         state.end()
     }
 }
@@ -136,7 +145,7 @@ impl Transaction {
             .map(|(tx_id, out_idx)| TxInput {
                 tx_id: tx_id.clone(),
                 output_index: *out_idx,
-                public_key: wallet.get_pub_key(),
+                public_key: wallet.get_pub_key().clone(),
                 signature: None,
             })
             .collect::<Vec<TxInput>>();
@@ -161,10 +170,13 @@ impl Transaction {
 
         let msg: Message = Message::from_digest(tx.id.clone().try_into()?);
 
+        // TODO: handle error
+        let public_key = PublicKey::from_str(wallet.get_pub_key()).unwrap();
+
         for input in &mut tx.inputs {
             let input_sign = Self::sign(&msg, &wallet)?;
-            secp.verify_ecdsa(&msg, &input_sign, &wallet.get_pub_key())?;
-            input.signature = Some(input_sign);
+            secp.verify_ecdsa(&msg, &input_sign, &public_key)?;
+            input.signature = Some(input_sign.to_string());
         }
 
         Ok(tx)
@@ -172,7 +184,8 @@ impl Transaction {
 
     fn sign(msg: &Message, wallet: &Wallet) -> TxResult<Signature> {
         let secp = Secp256k1::new();
-        Ok(secp.sign_ecdsa(msg, &wallet.get_secret_key()))
+        let secret_key = SecretKey::from_str(wallet.get_secret_key()).unwrap(); // TODO: handle error
+        Ok(secp.sign_ecdsa(msg, &secret_key))
     }
 
     // TODO: this might be inaccurrate - think about it

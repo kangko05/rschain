@@ -190,6 +190,10 @@ impl Chain {
     pub fn get_block_height(&self) -> u64 {
         self.blocks.len() as u64
     }
+
+    pub fn get_blocks(&self) -> &Vec<Block> {
+        &self.blocks
+    }
 }
 
 #[cfg(test)]

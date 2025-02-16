@@ -2,14 +2,14 @@
 
 use rand::rngs::OsRng;
 use ripemd::{Digest, Ripemd160};
-use secp256k1::{PublicKey, Secp256k1, SecretKey};
+use secp256k1::{PublicKey, Secp256k1};
 
 use crate::utils;
 
 #[derive(Debug, Clone)]
 pub struct Wallet {
-    public_key: PublicKey,
-    private_key: SecretKey,
+    public_key: String,
+    private_key: String,
     address: String,
 }
 
@@ -18,6 +18,8 @@ impl Wallet {
         let secp = Secp256k1::new();
         let (private_key, public_key) = secp.generate_keypair(&mut OsRng);
         let address = Self::gen_address(&public_key);
+        let public_key = public_key.to_string();
+        let private_key = private_key.display_secret().to_string();
 
         Self {
             public_key,
@@ -43,12 +45,16 @@ impl Wallet {
         bs58::encode(address_bytes).into_string()
     }
 
-    pub fn get_pub_key(&self) -> PublicKey {
-        self.public_key
+    // TODO: handle error
+    pub fn get_pub_key(&self) -> &String {
+        &self.public_key
+        // PublicKey::from_str(&self.public_key).unwrap()
     }
 
-    pub fn get_secret_key(&self) -> SecretKey {
-        self.private_key
+    // TODO: handle error
+    pub fn get_secret_key(&self) -> &String {
+        &self.private_key
+        // SecretKey::from_str(&self.private_key).unwrap()
     }
 
     pub fn get_address(&self) -> &String {

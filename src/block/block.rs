@@ -13,7 +13,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::{ser::SerializeStruct, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
 
 use super::{
     errors::{BlockError, BlockResult},
@@ -21,7 +21,7 @@ use super::{
 };
 use crate::utils;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 struct BlockHeader {
     previous_hash: String,
     merkle_root: Vec<u8>,
@@ -45,7 +45,7 @@ impl Serialize for BlockHeader {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Block {
     header: BlockHeader,
     transactions: Vec<Transaction>,
@@ -57,9 +57,10 @@ impl Serialize for Block {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("Block", 5)?;
+        let mut state = serializer.serialize_struct("Block", 3)?;
         state.serialize_field("header", &self.header)?;
         state.serialize_field("transactions", &self.transactions)?;
+        state.serialize_field("max_tx", &self.max_tx)?;
         state.end()
     }
 }
