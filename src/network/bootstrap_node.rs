@@ -25,15 +25,22 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use serde_json::json;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use super::peer::PeersMap;
+use super::NetMessage;
+use super::{errors::NetResult, NetOps};
 use crate::blockchain::{Block, Chain, Transaction};
 
-#[derive(Debug)]
 pub struct BootstrapNode {
     uuid: String,
     socket_addr: String,
     chain: Chain,
+    peers: PeersMap,
 }
 
 const BOOTSTRAP_PORT: u16 = 8000;
@@ -46,11 +53,12 @@ impl BootstrapNode {
             uuid: Uuid::new_v4().to_string(),
             chain: Self::init_chain(),
             socket_addr,
+            peers: PeersMap::new(),
         }
     }
 
     // failing to init chain -> panic
-    pub fn init_chain() -> Chain {
+    fn init_chain() -> Chain {
         let mut chain = Chain::new();
 
         // first tx
@@ -67,13 +75,42 @@ impl BootstrapNode {
     }
 }
 
+// runner
+impl BootstrapNode {
+    pub async fn run(&self) -> NetResult<()> {
+        println!("running bootstrap node at {}", self.socket_addr);
+
+        let (tx, rx) = mpsc::channel::<(NetMessage, TcpStream)>(32);
+
+        let peers = self.peers.get_addr_vec();
+        let listen_handle = NetOps::listen(&self.socket_addr, tx);
+        let msg_handle = NetOps::abc(rx, move |msg, stream| {
+            Self::handle_msg(msg, stream, peers.to_vec());
+        });
+
+        let _ = tokio::join!(listen_handle, msg_handle);
+
+        Ok(())
+    }
+
+    async fn handle_msg(msg: NetMessage, mut stream: TcpStream, peers_addrs: Vec<String>) {
+        match msg {
+            NetMessage::GetPeers => {
+                let payload = serde_json::to_vec(&json!(NetMessage::Peers(peers_addrs))).unwrap();
+                NetOps::write_message(&mut stream, payload);
+            }
+            NetMessage::GetChain => {}
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod bootstrap_test {
     use super::*;
 
     #[test]
     fn new() {
-        let boot_node = BootstrapNode::new();
-        dbg!(boot_node);
+        let _ = BootstrapNode::new();
     }
 }
