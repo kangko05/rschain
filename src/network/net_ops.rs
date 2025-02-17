@@ -6,6 +6,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use crate::blockchain::{Block, Transaction};
 use crate::network::errors::NetError;
 
 use super::errors::NetResult;
@@ -15,10 +16,17 @@ pub enum NetMessage {
     // req
     GetChain,
     GetPeers,
+    AddToPeers(String),
+
+    // broadcast
+    NewBlock(Block),
+    NewTx(Transaction),
+    NewNode(String),
 
     // resp
     Peers(Vec<String>), // socket addresses of peers
-    NewNode(String),
+    Blocks(Vec<Block>), // resp to GetChain req
+    Ok,
 }
 
 /// Network Operations for nodes
@@ -27,22 +35,7 @@ pub enum NetMessage {
 /// - get the message through channel
 pub struct NetOps;
 
-impl NetOps {}
-
 impl NetOps {
-    // TODO: think about i really need this
-    pub fn abc<F>(mut rx: mpsc::Receiver<(NetMessage, TcpStream)>, handle_msg: F) -> JoinHandle<()>
-    where
-        F: Fn(NetMessage, TcpStream) + Send + 'static,
-    {
-        tokio::spawn(async move {
-            while let Some((msg, stream)) = rx.recv().await {
-                // handle message here
-                handle_msg(msg, stream);
-            }
-        })
-    }
-
     /// msg -> serialize to json -> send
     pub async fn write_message(stream: &mut TcpStream, msg: impl Serialize) -> NetResult<()> {
         let msg_bytes = serde_json::to_vec(&msg)?;
@@ -94,7 +87,7 @@ impl NetOps {
         });
     }
 
-    async fn read_stream(stream: &mut TcpStream) -> NetResult<Vec<u8>> {
+    pub async fn read_stream(stream: &mut TcpStream) -> NetResult<Vec<u8>> {
         // read length ->  read payload
         let mut len_buf = [0u8; 4];
         if stream.read_exact(&mut len_buf).await.is_ok() {

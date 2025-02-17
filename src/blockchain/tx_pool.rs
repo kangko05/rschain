@@ -12,6 +12,9 @@ impl TxPool {
     pub fn new() -> Self {
         Self { pool: vec![] }
     }
+    pub fn len(&self) -> usize {
+        self.pool.len()
+    }
 
     pub fn add_many(&mut self, items: &Vec<Transaction>) {
         for it in items {

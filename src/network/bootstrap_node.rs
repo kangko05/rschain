@@ -28,24 +28,22 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, RwLock, RwLockWriteGuard};
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 
 use super::NetMessage;
 use super::{errors::NetResult, NetOps};
+use super::{NodeOps, NodeType, PeersMapType, RunNode};
 use crate::blockchain::{Block, Chain, Transaction};
-
-pub type PeersMapType = HashMap<String, TcpStream>; // ipaddr, stream
 
 pub struct BootstrapNode {
     uuid: String,
     socket_addr: String,
-    chain: Chain,
+    chain: Arc<RwLock<Chain>>,
     peers: Arc<RwLock<PeersMapType>>,
 }
 
-const BOOTSTRAP_PORT: u16 = 8000;
+pub const BOOTSTRAP_PORT: u16 = 8000;
 
 impl BootstrapNode {
     pub fn new() -> Self {
@@ -53,7 +51,7 @@ impl BootstrapNode {
 
         Self {
             uuid: Uuid::new_v4().to_string(),
-            chain: Self::init_chain(),
+            chain: Arc::new(RwLock::new(Self::init_chain())),
             socket_addr,
             peers: Arc::new(RwLock::new(HashMap::<String, TcpStream>::new())),
         }
@@ -78,73 +76,16 @@ impl BootstrapNode {
 }
 
 // runner
-impl BootstrapNode {
-    pub async fn run(&self) -> NetResult<()> {
-        println!("running bootstrap node at {}", self.socket_addr);
-
+impl RunNode for BootstrapNode {
+    async fn run(&self) -> NetResult<()> {
         let (tx, rx) = mpsc::channel::<(NetMessage, TcpStream)>(32);
 
         let listen_handle = NetOps::listen(&self.socket_addr, tx);
-        let msg_handle = self.handle_msg(rx);
+        let msg_handle =
+            NodeOps::handle_messages(NodeType::Bootstrap, &self.peers, &self.chain, rx, None);
 
         let _ = tokio::join!(listen_handle, msg_handle);
 
         Ok(())
-    }
-
-    fn handle_msg(&self, mut rx: mpsc::Receiver<(NetMessage, TcpStream)>) -> JoinHandle<()> {
-        let peers = Arc::clone(&self.peers);
-        let blocks = self.chain.get_blocks().clone();
-        tokio::spawn(async move {
-            while let Some((msg, stream)) = rx.recv().await {
-                match msg {
-                    NetMessage::GetChain => {
-                        let mut stream = stream;
-                        if let Err(err) = NetOps::write_message(&mut stream, &blocks).await {
-                            eprintln!("failed to write response: {err}");
-                        }
-                    }
-
-                    NetMessage::GetPeers => {
-                        if let Ok(addr) = stream.peer_addr() {
-                            // broad cast newnode
-                            let w_peers = peers.write().await;
-                            let mut w_peers = Self::broadcast_to_peers(w_peers, &msg).await;
-
-                            // insert new node
-                            w_peers.insert(addr.to_string(), stream);
-                        } else {
-                            eprintln!("faild to get address from the stream");
-                        };
-                    }
-
-                    _ => eprintln!("msg ignored"), // TODO: implement display for msg to specify
-                                                   // the ignored msg type
-                }
-            }
-        })
-    }
-
-    async fn broadcast_to_peers<'a>(
-        mut w_peers: RwLockWriteGuard<'a, PeersMapType>,
-        msg: &NetMessage,
-    ) -> RwLockWriteGuard<'a, PeersMapType> {
-        for peer_stream in w_peers.values_mut() {
-            if let Err(err) = NetOps::write_message(peer_stream, msg).await {
-                eprintln!("failed to write new node msg: {err}")
-            };
-        }
-
-        w_peers
-    }
-}
-
-#[cfg(test)]
-mod bootstrap_test {
-    use super::*;
-
-    #[test]
-    fn new() {
-        let _ = BootstrapNode::new();
     }
 }

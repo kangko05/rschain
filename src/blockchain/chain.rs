@@ -170,6 +170,7 @@ impl Chain {
         txs
     }
 
+    /// always return Ok(..) - for genesis block, it will return "", else last hash
     pub fn get_last_block_hash_string(&self) -> BlockResult<String> {
         match self.blocks.last() {
             Some(blk) => Ok(utils::hash_to_string(&blk.calculate_hash()?)),
