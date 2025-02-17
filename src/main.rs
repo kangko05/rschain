@@ -33,7 +33,13 @@ async fn server() {
 
 async fn client() {
     let mut stream = TcpStream::connect("127.0.0.1:8000").await.unwrap();
+    //if let Err(err) = NetOps::write_message(&mut stream, NetMessage::GetChain).await {
+    //    eprintln!("failed to write msg: {err}");
+    //};
+
     if let Err(err) = NetOps::write_message(&mut stream, NetMessage::GetPeers).await {
         eprintln!("failed to write msg: {err}");
     };
+
+    println!("sent")
 }

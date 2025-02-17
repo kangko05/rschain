@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use std::future::Future;
-
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -20,6 +18,7 @@ pub enum NetMessage {
 
     // resp
     Peers(Vec<String>), // socket addresses of peers
+    NewNode(String),
 }
 
 /// Network Operations for nodes
@@ -31,6 +30,7 @@ pub struct NetOps;
 impl NetOps {}
 
 impl NetOps {
+    // TODO: think about i really need this
     pub fn abc<F>(mut rx: mpsc::Receiver<(NetMessage, TcpStream)>, handle_msg: F) -> JoinHandle<()>
     where
         F: Fn(NetMessage, TcpStream) + Send + 'static,
@@ -43,6 +43,7 @@ impl NetOps {
         })
     }
 
+    /// msg -> serialize to json -> send
     pub async fn write_message(stream: &mut TcpStream, msg: impl Serialize) -> NetResult<()> {
         let msg_bytes = serde_json::to_vec(&msg)?;
         let msg_len = (msg_bytes.len() as u32).to_be_bytes();
