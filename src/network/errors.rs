@@ -7,6 +7,7 @@ pub enum NetError {
     String(String),
     IoError(tokio::io::Error),
     AddrParseError(std::net::AddrParseError),
+    SerdeError(serde_json::Error),
 }
 
 impl NetError {
@@ -27,12 +28,19 @@ impl From<std::net::AddrParseError> for NetError {
     }
 }
 
+impl From<serde_json::Error> for NetError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::SerdeError(value)
+    }
+}
+
 impl Display for NetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::String(v) => write!(f, "{}", v),
             Self::IoError(v) => write!(f, "{}", v),
             Self::AddrParseError(v) => write!(f, "{}", v),
+            Self::SerdeError(v) => write!(f, "{}", v),
         }
     }
 }
