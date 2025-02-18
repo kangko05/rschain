@@ -46,7 +46,7 @@ impl Serialize for TxInput {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("TxInput", 0)?;
+        let mut state = serializer.serialize_struct("TxInput", 4)?;
         state.serialize_field("tx_id", &self.tx_id)?;
         state.serialize_field("output_index", &self.output_index)?;
 
@@ -102,7 +102,7 @@ impl Serialize for TxOutput {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transaction {
     id: Vec<u8>, // hash
     inputs: Vec<TxInput>,
@@ -111,20 +111,26 @@ pub struct Transaction {
     fee: u64,
 }
 
-impl Serialize for Transaction {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("Transaction", 5)?;
-        state.serialize_field("id", &self.id)?;
-        state.serialize_field("inputs", &self.inputs)?;
-        state.serialize_field("outputs", &self.outputs)?;
-        state.serialize_field("block_height", &self.block_height)?;
-        state.serialize_field("fee", &self.fee)?;
-        state.end()
+impl PartialEq for Transaction {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
     }
 }
+
+//impl Serialize for Transaction {
+//    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//    where
+//        S: serde::Serializer,
+//    {
+//        let mut state = serializer.serialize_struct("Transaction", 5)?;
+//        state.serialize_field("id", &self.id)?;
+//        state.serialize_field("inputs", &self.inputs)?;
+//        state.serialize_field("outputs", &self.outputs)?;
+//        state.serialize_field("block_height", &self.block_height)?;
+//        state.serialize_field("fee", &self.fee)?;
+//        state.end()
+//    }
+//}
 
 impl Transaction {
     /// 1. create tx inputs

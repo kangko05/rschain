@@ -3,10 +3,11 @@
 use rand::rngs::OsRng;
 use ripemd::{Digest, Ripemd160};
 use secp256k1::{PublicKey, Secp256k1};
+use serde::{Deserialize, Serialize};
 
 use crate::utils;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Wallet {
     public_key: String,
     private_key: String,

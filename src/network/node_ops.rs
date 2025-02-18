@@ -2,7 +2,7 @@
 
 use super::errors::{NetError, NetResult};
 use super::{NetMessage, NetOps};
-use crate::blockchain::{Block, Chain, Transaction, TxResult};
+use crate::blockchain::{Block, Chain, Transaction, TxPool, TxResult};
 use crate::wallet::Wallet;
 
 use std::collections::HashMap;
@@ -12,7 +12,8 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock, RwLockWriteGuard};
 use tokio::task::JoinHandle;
 
-pub type PeersMapType = HashMap<String, TcpStream>; // ipaddr, stream
+//pub type PeersMapType = HashMap<String, TcpStream>; // ipaddr, stream
+pub type PeersMapType = Vec<String>; // listener address
 
 pub trait RunNode {
     async fn run(&self) -> NetResult<()>;
@@ -39,14 +40,15 @@ pub struct NodeOps;
 
 // public - basic methods
 impl NodeOps {
-    pub fn create_tx(
-        chain: &Chain,
+    pub async fn create_tx(
+        chain: &Arc<RwLock<Chain>>,
         from: &Wallet,
         to_addr: &str,
         value: u64,
     ) -> TxResult<Transaction> {
-        let utxos = chain.get_utxos();
-        let from_outputs = chain.get_address_txs(from.get_address());
+        let r_chain = chain.read().await;
+        let utxos = r_chain.get_utxos();
+        let from_outputs = r_chain.get_address_txs(from.get_address());
 
         Transaction::new(utxos, from, from_outputs, to_addr, value)
     }
@@ -65,11 +67,13 @@ impl NodeOps {
 // public - requests
 impl NodeOps {
     pub async fn broadcast_to_peers<'a>(
-        mut w_peers: RwLockWriteGuard<'a, PeersMapType>,
+        w_peers: RwLockWriteGuard<'a, PeersMapType>,
         msg: &NetMessage,
     ) -> RwLockWriteGuard<'a, PeersMapType> {
-        for peer_stream in w_peers.values_mut() {
-            if let Err(err) = NetOps::write_message(peer_stream, msg).await {
+        for peer_addr in w_peers.iter() {
+            let mut stream = TcpStream::connect(peer_addr).await.unwrap();
+
+            if let Err(err) = NetOps::write_message(&mut stream, msg).await {
                 eprintln!("failed to write new node msg: {err}")
             };
         }
@@ -106,7 +110,8 @@ impl NodeOps {
     }
 
     pub async fn connect_to_peers(peers_addrs: Vec<String>) -> PeersMapType {
-        let mut peers = HashMap::<String, TcpStream>::new();
+        //let mut peers = HashMap::<String, TcpStream>::new();
+        let mut peers = vec![];
 
         if peers_addrs.is_empty() {
             return peers;
@@ -114,7 +119,8 @@ impl NodeOps {
 
         for addr in peers_addrs {
             if let Ok(stream) = TcpStream::connect(&addr).await {
-                peers.insert(addr, stream);
+                //peers.insert(addr, stream);
+                peers.push(addr);
             };
         }
 
@@ -144,14 +150,17 @@ impl NodeOps {
         peers: &Arc<RwLock<PeersMapType>>,
         chain: &Arc<RwLock<Chain>>,
         mut rx: mpsc::Receiver<(NetMessage, TcpStream)>,
+        mempool: &Arc<RwLock<TxPool>>, // for mining node
         tx: Option<mpsc::Sender<Transaction>>,
     ) -> JoinHandle<()> {
         let peers = Arc::clone(peers);
         let chain = Arc::clone(chain);
+        let mempool = Arc::clone(mempool);
+        //let mempool = mempool.as_ref().map(Arc::clone);
         tokio::spawn(async move {
             let blocks = chain.read().await.get_blocks().clone();
 
-            while let Some((msg, mut stream)) = rx.recv().await {
+            if let Some((msg, mut stream)) = rx.recv().await {
                 match msg {
                     NetMessage::GetChain => {
                         println!("got getchain msg");
@@ -171,7 +180,7 @@ impl NodeOps {
                         let r_peers = peers.read().await;
                         let peers_vec = r_peers
                             .iter()
-                            .map(|(peer_addr, _)| peer_addr.to_string())
+                            .map(|peer_addr| peer_addr.to_string())
                             .collect::<Vec<_>>();
 
                         if let Err(err) =
@@ -182,7 +191,7 @@ impl NodeOps {
                     }
 
                     NetMessage::AddToPeers(addr) => {
-                        if peers.read().await.contains_key(&addr) {
+                        if peers.read().await.contains(&addr) {
                             eprintln!("peer {} already in the list", addr);
                             return;
                         }
@@ -202,11 +211,12 @@ impl NodeOps {
                         };
 
                         // insert new node
-                        w_peers.insert(addr, stream);
+                        //w_peers.insert(addr, stream);
+                        w_peers.push(addr);
                     }
 
                     NetMessage::NewNode(addr) => {
-                        if peers.read().await.contains_key(&addr) {
+                        if peers.read().await.contains(&addr) {
                             eprintln!("peer {} already in the list", addr);
                             return;
                         }
@@ -219,7 +229,10 @@ impl NodeOps {
                             eprintln!("boot: failed to write ok back: {err}");
                         };
 
-                        w_peers.insert(addr, stream);
+                        //w_peers.insert(addr, stream);
+                        w_peers.push(addr);
+
+                        dbg!(&w_peers);
                     }
 
                     // spread to peers
@@ -228,6 +241,11 @@ impl NodeOps {
                     //  - check chain if its already in the chain
                     //  - check signature again
                     NetMessage::NewTx(transaction) => {
+                        let r_pool = mempool.read().await;
+                        if r_pool.contains(&transaction) {
+                            return;
+                        }
+
                         let w_peers = peers.write().await;
                         let _ = Self::broadcast_to_peers(
                             w_peers,
@@ -248,18 +266,40 @@ impl NodeOps {
                         }
                     }
 
-                    // TODO: validate block & check if its already in the chain
                     NetMessage::NewBlock(block) => {
                         {
-                            // add new block to its chain
+                            // do all these with one lock to prevent another block being added to
+                            // the chain
                             let mut w_chain = chain.write().await;
-                            w_chain.add_blk(&block).unwrap();
+
+                            // validateb block
+                            let prev_hash = w_chain.get_last_block_hash_string().expect("this really shouldn't fail - failing this method means the chain is empty");
+                            let timestamp = w_chain.get_last_block_timestamp();
+
+                            if let Err(err) = block.validate(&prev_hash, timestamp) {
+                                eprintln!("failed to validate new block: {err}");
+                                return;
+                            };
+
+                            // add new block to its chain
+                            if let Err(err) = w_chain.add_blk(&block) {
+                                eprintln!("failed to add new block to the chain: {err}");
+                                return;
+                            };
                         }
 
                         // broadcast to its peers
                         Self::broadcast_block(&block, &peers).await;
 
-                        println!();
+                        if node_type.eq(&NodeType::Mining) {
+                            let Ok(txs) = block.get_transactions() else {
+                                eprintln!("failed to get transactions from new block");
+                                return;
+                            };
+
+                            let mut w_pool = mempool.write().await;
+                            w_pool.remove_transactions(txs);
+                        }
                     }
 
                     _ => eprintln!("msg ignored"), // TODO: implement display for msg to specify

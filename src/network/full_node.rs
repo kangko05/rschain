@@ -5,12 +5,14 @@ use std::sync::Arc;
 
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use super::{errors::NetResult, NetOps};
 use super::{NetMessage, BOOTSTRAP_PORT};
-use super::{NodeOps, NodeType, PeersMapType, RunNode};
-use crate::blockchain::Chain;
+use super::{NodeOps, NodeType, PeersMapType};
+use crate::blockchain::{Chain, TxPool, TxResult};
+use crate::wallet::Wallet;
 
 #[derive(Debug)]
 pub struct FullNode {
@@ -18,6 +20,7 @@ pub struct FullNode {
     socket_addr: String,
     chain: Arc<RwLock<Chain>>,
     peers: Arc<RwLock<PeersMapType>>,
+    mempool: Arc<RwLock<TxPool>>,
 }
 
 // constructor
@@ -37,19 +40,34 @@ impl FullNode {
             chain: Arc::new(RwLock::new(Chain::from(blocks)?)),
             socket_addr,
             peers: Arc::new(RwLock::new(peers)),
+            mempool: Arc::new(RwLock::new(TxPool::new())),
         })
     }
 }
 
-impl RunNode for FullNode {
-    async fn run(&self) -> NetResult<()> {
+// TODO: to trait
+impl FullNode {
+    pub fn run(&self) -> NetResult<Vec<JoinHandle<()>>> {
         let (tx, rx) = mpsc::channel::<(NetMessage, TcpStream)>(32);
 
         let listen_handle = NetOps::listen(&self.socket_addr, tx);
-        let msg_handle =
-            NodeOps::handle_messages(NodeType::Full, &self.peers, &self.chain, rx, None);
+        let msg_handle = NodeOps::handle_messages(
+            NodeType::Full,
+            &self.peers,
+            &self.chain,
+            rx,
+            &self.mempool,
+            None,
+        );
 
-        let _ = tokio::join!(listen_handle, msg_handle);
+        Ok(vec![listen_handle, msg_handle])
+    }
+}
+
+impl FullNode {
+    pub async fn send_tx(&self, from: &Wallet, to_addr: &str, value: u64) -> TxResult<()> {
+        let tx = NodeOps::create_tx(&self.chain, from, to_addr, value).await?;
+        NodeOps::broadcast_tx(&tx, &self.peers).await;
 
         Ok(())
     }
@@ -71,5 +89,9 @@ impl FullNode {
 
     pub fn get_uuid(&self) -> &String {
         &self.uuid
+    }
+
+    pub fn get_mempool(&self) -> &Arc<RwLock<TxPool>> {
+        &self.mempool
     }
 }

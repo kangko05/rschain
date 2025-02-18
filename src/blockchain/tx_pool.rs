@@ -12,6 +12,7 @@ impl TxPool {
     pub fn new() -> Self {
         Self { pool: vec![] }
     }
+
     pub fn len(&self) -> usize {
         self.pool.len()
     }
@@ -22,9 +23,9 @@ impl TxPool {
         }
     }
 
-    pub fn get_many(&mut self, num: usize) -> TxpoolResult<Vec<Transaction>> {
+    pub fn get_many(&mut self, num: usize) -> Option<Vec<Transaction>> {
         if self.pool.len() < num {
-            return Err(TxpoolError::IndexOutOfBound);
+            return None;
         }
 
         let mut items = Vec::with_capacity(num);
@@ -33,7 +34,7 @@ impl TxPool {
             items.push(self.get_one()?);
         }
 
-        Ok(items)
+        Some(items)
     }
 
     pub fn add_one(&mut self, item: &Transaction) {
@@ -41,23 +42,41 @@ impl TxPool {
         self.heap_up();
     }
 
-    pub fn get_one(&mut self) -> TxpoolResult<Transaction> {
+    pub fn get_one(&mut self) -> Option<Transaction> {
         if self.pool.is_empty() {
-            return Err(TxpoolError::IndexOutOfBound);
+            return None;
         }
 
         let length = self.pool.len();
         self.pool.swap(0, length - 1);
 
-        let it = if let Some(it) = self.pool.pop() {
-            it
-        } else {
-            return Err(TxpoolError::IndexOutOfBound);
-        };
+        if let Some(it) = self.pool.pop() {
+            self.heap_down();
+            return Some(it);
+        }
 
-        self.heap_down();
+        None
+    }
 
-        Ok(it)
+    pub fn remove_transactions(&mut self, txs: &[Transaction]) {
+        self.pool.retain(|tx| !txs.contains(tx));
+        self.heapify();
+    }
+
+    pub fn contains(&self, tx: &Transaction) -> bool {
+        self.pool.contains(tx)
+    }
+
+    pub fn clear(&mut self) {
+        self.pool = vec![];
+    }
+
+    fn heapify(&mut self) {
+        let length = self.pool.len();
+
+        for i in (0..length / 2).rev() {
+            self.heap_down();
+        }
     }
 
     fn heap_up(&mut self) {
