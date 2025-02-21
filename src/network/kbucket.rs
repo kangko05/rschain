@@ -27,7 +27,7 @@ impl Kbucket {
             }
         }
 
-        let node_info = NodeInfo::new(node_id);
+        let node_info = NodeInfo::new(node_id, "");
 
         if self.nodes.len() < self.k {
             self.nodes.push(node_info);

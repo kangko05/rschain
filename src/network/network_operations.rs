@@ -4,17 +4,22 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::errors::NetworkResult;
+use super::errors::{NetworkError, NetworkResult};
+use super::node::NodeInfo;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub enum NetworkMessage {}
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum NetworkMessage {
+    FindNode { target_id: Vec<u8> },
+    FoundNode { nodes: Vec<NodeInfo> },
+}
 
+#[derive(Debug)]
 pub struct NetOps;
 
 impl NetOps {
     /// send msg, msg len first, then actual msg
-    pub async fn write(stream: &mut TcpStream, msg: NetworkMessage) -> NetworkResult<()> {
-        let payload = serde_json::to_vec(&msg)?;
+    pub async fn write(stream: &mut TcpStream, net_msg: NetworkMessage) -> NetworkResult<()> {
+        let payload = serde_json::to_vec(&net_msg)?;
         let len = (payload.len() as u32).to_be_bytes();
 
         let _ = stream.write(&len).await?;
@@ -27,13 +32,13 @@ impl NetOps {
     /// parse payload into network message before returning it
     pub async fn read(stream: &mut TcpStream) -> NetworkResult<NetworkMessage> {
         let mut len_buf = [0u8; 4]; // expectin be bytes of u32
-        stream.read_exact(&mut len_buf).await?;
+        if stream.read_exact(&mut len_buf).await? == 0 {
+            return Err(NetworkError::ConnectionClosed);
+        };
 
         let len = u32::from_be_bytes(len_buf);
         let mut payload_buf = vec![0u8; len as usize];
         stream.read_exact(&mut payload_buf).await?;
-
-        // deserialize
 
         Ok(serde_json::from_slice::<NetworkMessage>(&payload_buf)?)
     }

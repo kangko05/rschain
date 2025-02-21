@@ -9,6 +9,7 @@ pub enum NetworkError {
     Str(String),
     SerdeJsonError(serde_json::Error),
     IoError(tokio::io::Error),
+    ConnectionClosed,
 }
 
 impl From<serde_json::Error> for NetworkError {
@@ -35,6 +36,7 @@ impl Display for NetworkError {
             Self::Str(v) => write!(f, "{}", v),
             Self::SerdeJsonError(v) => write!(f, "{}", v),
             Self::IoError(v) => write!(f, "{}", v),
+            Self::ConnectionClosed => write!(f, "connection closed"),
         }
     }
 }
