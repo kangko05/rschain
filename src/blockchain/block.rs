@@ -79,7 +79,7 @@ impl Block {
         let header = BlockHeader {
             previous_hash: previous_hash.to_string(),
             merkle_root: merkle_tree.root(),
-            timestamp: utils::unixtime_now()?,
+            timestamp: utils::unixtime_now(),
             difficulty: 4,
             nonce: 0,
         };

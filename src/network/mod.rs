@@ -1,9 +1,4 @@
 mod errors;
-mod msg_handler;
+mod kbucket;
+mod network_operations;
 mod node;
-mod peer;
-pub mod utils;
-
-pub use msg_handler::HandleMessage;
-pub use node::light::Node;
-pub use peer::Peer;
