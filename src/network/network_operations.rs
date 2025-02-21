@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -11,6 +12,9 @@ use super::node::NodeInfo;
 pub enum NetworkMessage {
     FindNode { target_id: Vec<u8> },
     FoundNode { nodes: Vec<NodeInfo> },
+
+    Ping,
+    Pong,
 }
 
 #[derive(Debug)]
@@ -41,5 +45,16 @@ impl NetOps {
         stream.read_exact(&mut payload_buf).await?;
 
         Ok(serde_json::from_slice::<NetworkMessage>(&payload_buf)?)
+    }
+
+    pub async fn ping(node_info: &NodeInfo) -> NetworkResult<bool> {
+        let mut stream = TcpStream::connect(node_info.get_addr()).await?;
+
+        NetOps::write(&mut stream, NetworkMessage::Ping).await?;
+
+        match tokio::time::timeout(Duration::from_secs(5), NetOps::read(&mut stream)).await {
+            Ok(Ok(NetworkMessage::Pong)) => Ok(true),
+            _ => Ok(false),
+        }
     }
 }

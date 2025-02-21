@@ -1,6 +1,12 @@
 #![allow(dead_code)]
+/*
+ * Node
+ * - will be used as base node (or light node)
+ * - implemented kademlia
+ */
 
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
@@ -43,6 +49,14 @@ impl NodeInfo {
     }
 }
 
+impl Display for NodeInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "id: {}", utils::hash_to_string(&self.id))?;
+        writeln!(f, "last seen: {}", self.last_seen)?;
+        writeln!(f, "addr: {}", self.socket_addr)
+    }
+}
+
 #[derive(Debug)]
 pub struct Node {
     id: Vec<u8>,
@@ -69,11 +83,19 @@ impl Node {
     pub fn get_id(&self) -> &Vec<u8> {
         &self.id
     }
+
+    pub fn get_node_info(&self) -> NodeInfo {
+        NodeInfo {
+            id: self.id.clone(),
+            last_seen: utils::unixtime_now(),
+            socket_addr: self.socket_addr,
+        }
+    }
 }
 
 // routing methods
 impl Node {
-    pub fn add_node(&mut self, other_id: &[u8]) {
+    pub async fn add_node(&mut self, other_id: &[u8], socket_addr: SocketAddr) {
         let bucket_idx = self.find_bucket_idx(other_id);
 
         if !self.bucket_exists(bucket_idx) {
@@ -84,8 +106,13 @@ impl Node {
             .iter_mut()
             .find(|bucket| bucket.get_idx() == bucket_idx)
             .expect("bucket should be in the list")
-            .push(other_id);
+            .push(other_id, socket_addr)
+            .await;
 
+        // TODO: Optimize sorting - current approach sorts entire bucket list after each addition
+        // Could be improved by:
+        // 1. Using binary search to find insertion position (self.buckets.binary_search_by_key(...))
+        // 2. Implementing lazy sorting (sort only when needed)
         self.buckets.sort_by_key(|bucket| bucket.get_idx());
     }
 
@@ -95,6 +122,7 @@ impl Node {
             .is_ok()
     }
 
+    /// finds first 1 in distance bits (meaning first bit that was different)
     fn find_bucket_idx(&self, other_id: &[u8]) -> usize {
         let distance = utils::xor_distance_256(&self.id, other_id);
 
@@ -130,20 +158,36 @@ impl Node {
         sorted_nodes
     }
 
-    pub fn bootstrap(&self, _seed_nodes: &[NodeInfo]) -> NetworkResult<()> {
+    pub async fn bootstrap(&mut self, seed_nodes: &[NodeInfo]) -> NetworkResult<()> {
+        let id = self.id.clone();
+        self.node_lookup(seed_nodes, &id, 20, true).await;
         Ok(())
     }
 
     /// find close nodes from itself -> request close nodes to find node
     //  1.find node from itself first
     //  2.if not found, send request to closest nodes
-    pub async fn node_lookup(&self, target_id: &[u8], k: usize) -> Option<NodeInfo> {
-        let close_nodes = self.find_node(target_id, k);
-        if let Some(found) = close_nodes.iter().find(|node| node.compare_id(target_id)) {
+    //  3. k -> max # of result
+    //      - set to same size as bucket (normally)
+    //      - small k will result in inefficent lookup
+    //      - large k will result in wasting network traffic
+    //
+    //  TODO: further optimization
+    //  1. set max concurrent requests for network optimazation
+    //  2. save all nodes from response -> sort -> pick nodes to request
+    pub async fn node_lookup(
+        &mut self,
+        start_nodes: &[NodeInfo],
+        target_id: &[u8],
+        k: usize,
+        is_bootstrap: bool, // if true adds found nodes to routing table
+    ) -> Option<NodeInfo> {
+        //let close_nodes = self.find_node(target_id, k);
+        if let Some(found) = start_nodes.iter().find(|node| node.compare_id(target_id)) {
             return Some(found.clone());
         }
 
-        let mut nodes_to_req = close_nodes.clone();
+        let mut nodes_to_req = start_nodes.to_vec();
         let mut visited: HashMap<Vec<u8>, bool> = HashMap::new();
         let max_iter = 20;
         let mut iter = 0;
@@ -159,7 +203,7 @@ impl Node {
             let mut added_any = false;
 
             for node in &nodes_to_req {
-                if visited.get(node.get_id()).is_some() {
+                if visited.contains_key(node.get_id()) {
                     continue;
                 }
 
@@ -168,24 +212,8 @@ impl Node {
 
                 let target_id = target_id.to_vec();
                 let req_addr = node.get_addr();
-                join_set.spawn(async move {
-                    let Ok(mut stream) = TcpStream::connect(req_addr).await else {
-                        return Err(NetworkError::str("close node not found"));
-                    };
-
-                    if let Err(err) = NetOps::write(
-                        &mut stream,
-                        NetworkMessage::FindNode {
-                            target_id: target_id.to_vec(),
-                        },
-                    )
-                    .await
-                    {
-                        return Err(err);
-                    };
-
-                    NetOps::read(&mut stream).await
-                });
+                join_set
+                    .spawn(async move { Self::request_close_nodes(&target_id, req_addr).await });
             }
 
             if !added_any {
@@ -193,22 +221,17 @@ impl Node {
             }
 
             // check results
-            let results = join_set.join_next().await;
             let mut found_nodes = vec![];
 
-            for result in results {
-                if let Ok(Ok(msg)) = result {
-                    match msg {
-                        NetworkMessage::FoundNode { nodes } => {
-                            found_nodes.extend(nodes);
+            while let Some(result) = join_set.join_next().await {
+                if let Ok(Ok(NetworkMessage::FoundNode { nodes })) = result {
+                    if is_bootstrap {
+                        for node in &nodes {
+                            self.add_node(&node.id, node.get_addr()).await;
                         }
-                        _ => continue,
                     }
+                    found_nodes.extend(nodes);
                 }
-            }
-
-            if found_nodes.is_empty() {
-                break;
             }
 
             let sorted_nodes = Self::sort_nodes_by_distance(&mut found_nodes, target_id);
@@ -224,6 +247,25 @@ impl Node {
         None
     }
 
+    async fn request_close_nodes(
+        target_id: &[u8],
+        req_addr: SocketAddr,
+    ) -> NetworkResult<NetworkMessage> {
+        let Ok(mut stream) = TcpStream::connect(req_addr).await else {
+            return Err(NetworkError::str("close node not found"));
+        };
+
+        NetOps::write(
+            &mut stream,
+            NetworkMessage::FindNode {
+                target_id: target_id.to_vec(),
+            },
+        )
+        .await?;
+
+        NetOps::read(&mut stream).await
+    }
+
     fn sort_nodes_by_distance(nodes: &mut [NodeInfo], target_id: &[u8]) -> Vec<NodeInfo> {
         // sort by  distance
         nodes.sort_by(|a, b| {
@@ -237,6 +279,25 @@ impl Node {
     }
 }
 
+impl Display for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "id: {}", utils::hash_to_string(&self.id))?;
+
+        if self.buckets.is_empty() {
+            write!(f, "buckets: [")?;
+        } else {
+            writeln!(f, "buckets: [")?;
+        }
+        for bucket in &self.buckets {
+            writeln!(f, "{}", bucket)?;
+        }
+
+        writeln!(f, "]")?;
+
+        writeln!(f, "addr: {}", self.socket_addr)
+    }
+}
+
 #[cfg(test)]
 mod node_tests {
     use super::*;
@@ -247,20 +308,21 @@ mod node_tests {
         dbg!(node);
     }
 
-    #[test]
-    fn add_node() {
+    #[tokio::test]
+    async fn add_node() {
         let mut node = Node::new(8000);
 
         for _ in 0..100 {
             let r_id = utils::sha256(Uuid::new_v4().to_string().as_bytes());
-            node.add_node(&r_id);
+            node.add_node(&r_id, "127.0.0.1:8080".parse().unwrap())
+                .await;
         }
 
         dbg!(node.buckets);
     }
 
-    #[test]
-    fn find_node() {
+    #[tokio::test]
+    async fn find_node() {
         let mut node = Node::new(8000);
 
         let r_id = utils::sha256(Uuid::new_v4().to_string().as_bytes());
@@ -269,7 +331,8 @@ mod node_tests {
 
         for _ in 0..100 {
             let r_id_ = utils::sha256(Uuid::new_v4().to_string().as_bytes());
-            node.add_node(&r_id_);
+            node.add_node(&r_id_, "127.0.0.1:8080".parse().unwrap())
+                .await;
         }
 
         let nodes = node.find_node(&r_id, 3);
