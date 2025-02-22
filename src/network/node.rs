@@ -226,6 +226,8 @@ impl Node {
         let id = self.id.clone();
 
         for seed in seed_nodes {
+            self.add_node(seed.get_id(), seed.get_addr()).await;
+
             let mut stream = TcpStream::connect(seed.get_addr()).await?;
             let msg = NetworkMessage::AddNode {
                 id: id.clone(),
