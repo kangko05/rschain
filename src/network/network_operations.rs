@@ -1,21 +1,14 @@
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc, oneshot};
 
 use super::errors::{NetworkError, NetworkResult};
+use super::message_handler::{MessageHandler, NetworkMessage};
 use super::node::NodeInfo;
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum NetworkMessage {
-    FindNode { target_id: Vec<u8> },
-    FoundNode { nodes: Vec<NodeInfo> },
-
-    Ping,
-    Pong,
-}
 
 #[derive(Debug)]
 pub struct NetOps;
@@ -55,6 +48,56 @@ impl NetOps {
         match tokio::time::timeout(Duration::from_secs(5), NetOps::read(&mut stream)).await {
             Ok(Ok(NetworkMessage::Pong)) => Ok(true),
             _ => Ok(false),
+        }
+    }
+
+    pub async fn listen(
+        socket_addr: SocketAddr,
+        msg_handler: impl MessageHandler + 'static,
+        req_tx: mpsc::Sender<(NetworkMessage, oneshot::Sender<Vec<NodeInfo>>)>, // for communication between handler & node
+    ) -> NetworkResult<()> {
+        let listener = TcpListener::bind(socket_addr).await?;
+        println!("listening to: {socket_addr}");
+
+        loop {
+            match listener.accept().await {
+                Ok((mut stream, addr)) => {
+                    println!("connection from {addr}");
+
+                    let handler = msg_handler.clone();
+                    let req_tx = req_tx.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            let req_tx = req_tx.clone();
+                            match Self::read(&mut stream).await {
+                                Ok(msg) => {
+                                    if let Err(err) =
+                                        handler.handle_message(&mut stream, req_tx, &msg).await
+                                    {
+                                        eprintln!("failed to send response: {err}");
+                                        break;
+                                    };
+                                }
+
+                                Err(err) => {
+                                    if err.to_string().contains("early eof")
+                                        || err.to_string().contains("connection reset")
+                                    {
+                                        // connection closed normally
+                                        eprintln!("connection closed");
+                                    } else {
+                                        // unexpected
+                                        eprintln!("failed to read message from connection: {err}");
+                                    }
+
+                                    break;
+                                }
+                            };
+                        }
+                    });
+                }
+                Err(err) => eprintln!("failed to accept connection: {err}"),
+            }
         }
     }
 }
