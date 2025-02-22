@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -101,23 +101,43 @@ impl Node {
 
 // server
 impl Node {
-    pub async fn run(self: Arc<Self>) {
-        let (tx, mut rx) = mpsc::channel::<(NetworkMessage, oneshot::Sender<Vec<NodeInfo>>)>(100);
+    pub async fn run(node: Arc<RwLock<Self>>) {
+        let (tx, mut rx) = mpsc::channel::<(NetworkMessage, oneshot::Sender<NetworkMessage>)>(100);
 
         // start listener
-        let socket_addr = self.socket_addr;
-        let handler = self.msg_handler.clone();
+        let socket_addr = { node.read().await.socket_addr };
+        let handler = { node.read().await.msg_handler.clone() };
         let tx = tx.clone();
         let listener_handle =
             tokio::spawn(async move { NetOps::listen(socket_addr, handler, tx).await });
 
         // handle request from the msg handler
-        let node = Arc::clone(&self);
+        let node = Arc::clone(&node);
         let channel_handle = tokio::spawn(async move {
-            while let Some((NetworkMessage::FindNode { target_id }, tx)) = rx.recv().await {
-                if let Err(err) = tx.send(node.find_node(&target_id, 20)) {
-                    eprintln!("failed to send result: {:?}", err);
-                };
+            while let Some((msg, tx)) = rx.recv().await {
+                match msg {
+                    NetworkMessage::FindNode { target_id } => {
+                        let msg = NetworkMessage::FoundNode {
+                            nodes: node.read().await.find_node(&target_id, 20),
+                        };
+
+                        if let Err(err) = tx.send(msg) {
+                            eprintln!("failed to send result: {:?}", err);
+                        };
+                    }
+
+                    NetworkMessage::AddNode { id, addr } => {
+                        let mut w_node = node.write().await;
+                        w_node.add_node(&id, addr).await;
+
+                        if w_node.socket_addr.port() == 8001 {
+                            println!("{w_node}");
+                        }
+
+                        //tx.send(NetworkMessage::Ok);
+                    }
+                    _ => {}
+                }
             }
         });
 
@@ -204,6 +224,17 @@ impl Node {
 
     pub async fn bootstrap(&mut self, seed_nodes: &[NodeInfo]) -> NetworkResult<()> {
         let id = self.id.clone();
+
+        for seed in seed_nodes {
+            let mut stream = TcpStream::connect(seed.get_addr()).await?;
+            let msg = NetworkMessage::AddNode {
+                id: id.clone(),
+                addr: self.socket_addr,
+            };
+
+            NetOps::write(&mut stream, msg).await?;
+        }
+
         self.node_lookup(seed_nodes, &id, 20, true).await;
         Ok(())
     }
@@ -215,6 +246,7 @@ impl Node {
     //      - set to same size as bucket (normally)
     //      - small k will result in inefficent lookup
     //      - large k will result in wasting network traffic
+    //  4. if used in bootstrap, it adds nodes along the way
     //
     //  TODO: further optimization
     //  1. set max concurrent requests for network optimazation

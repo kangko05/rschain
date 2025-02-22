@@ -54,7 +54,7 @@ impl NetOps {
     pub async fn listen(
         socket_addr: SocketAddr,
         msg_handler: impl MessageHandler + 'static,
-        req_tx: mpsc::Sender<(NetworkMessage, oneshot::Sender<Vec<NodeInfo>>)>, // for communication between handler & node
+        req_tx: mpsc::Sender<(NetworkMessage, oneshot::Sender<NetworkMessage>)>, // for communication between handler & node
     ) -> NetworkResult<()> {
         let listener = TcpListener::bind(socket_addr).await?;
         println!("listening to: {socket_addr}");

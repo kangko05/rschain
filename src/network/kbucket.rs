@@ -87,6 +87,6 @@ impl Display for Kbucket {
         }
         writeln!(f, "]")?;
 
-        writeln!(f, "k: {}", self.k)
+        write!(f, "k: {}", self.k)
     }
 }
