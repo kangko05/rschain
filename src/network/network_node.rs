@@ -20,17 +20,18 @@ use crate::utils;
 
 use super::errors::{NetworkError, NetworkResult};
 use super::kbucket::Kbucket;
-use super::message_handler::{NetworkMessage, NodeMessageHandler};
+use super::message_handler::{NetworkMessage, NetworkNodeMessageHandler};
 use super::network_operations::NetOps;
+use super::MessageHandler;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NodeInfo {
+pub struct NetworkNodeInfo {
     id: Vec<u8>,
     last_seen: u64, // UNIX time in sec
     socket_addr: SocketAddr,
 }
 
-impl NodeInfo {
+impl NetworkNodeInfo {
     pub fn new(id: &[u8], socket_addr: SocketAddr) -> Self {
         Self {
             id: id.to_vec(),
@@ -52,7 +53,7 @@ impl NodeInfo {
     }
 }
 
-impl Display for NodeInfo {
+impl Display for NetworkNodeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "id: {}", utils::hash_to_string(&self.id))?;
         writeln!(f, "last seen: {}", self.last_seen)?;
@@ -60,16 +61,16 @@ impl Display for NodeInfo {
     }
 }
 
-#[derive(Debug)]
-pub struct Node {
+#[derive(Debug, Clone)]
+pub struct NetworkNode {
     id: Vec<u8>,
     buckets: Vec<Kbucket>, // routing table
     socket_addr: SocketAddr,
 
-    msg_handler: NodeMessageHandler,
+    msg_handler: NetworkNodeMessageHandler,
 }
 
-impl Node {
+impl NetworkNode {
     pub fn new(port: u16) -> Self {
         let uuid = Uuid::new_v4().to_string();
         let id = utils::sha256(uuid.as_bytes());
@@ -82,7 +83,7 @@ impl Node {
             id,
             buckets: Vec::with_capacity(256),
             socket_addr,
-            msg_handler: NodeMessageHandler {},
+            msg_handler: NetworkNodeMessageHandler {},
         }
     }
 
@@ -90,8 +91,16 @@ impl Node {
         &self.id
     }
 
-    pub fn get_node_info(&self) -> NodeInfo {
-        NodeInfo {
+    pub fn get_addr(&self) -> SocketAddr {
+        self.socket_addr
+    }
+
+    pub fn get_msg_handler(&self) -> &NetworkNodeMessageHandler {
+        &self.msg_handler
+    }
+
+    pub fn get_node_info(&self) -> NetworkNodeInfo {
+        NetworkNodeInfo {
             id: self.id.clone(),
             last_seen: utils::unixtime_now(),
             socket_addr: self.socket_addr,
@@ -100,13 +109,14 @@ impl Node {
 }
 
 // server
-impl Node {
-    pub async fn run(node: Arc<RwLock<Self>>) {
+impl NetworkNode {
+    pub async fn run(node: Arc<RwLock<Self>>, msg_handler: impl MessageHandler + 'static) {
         let (tx, mut rx) = mpsc::channel::<(NetworkMessage, oneshot::Sender<NetworkMessage>)>(100);
 
         // start listener
         let socket_addr = { node.read().await.socket_addr };
-        let handler = { node.read().await.msg_handler.clone() };
+        //let handler = { node.read().await.msg_handler.clone() };
+        let handler = msg_handler.clone();
         let tx = tx.clone();
         let listener_handle =
             tokio::spawn(async move { NetOps::listen(socket_addr, handler, tx).await });
@@ -115,29 +125,8 @@ impl Node {
         let node = Arc::clone(&node);
         let channel_handle = tokio::spawn(async move {
             while let Some((msg, tx)) = rx.recv().await {
-                match msg {
-                    NetworkMessage::FindNode { target_id } => {
-                        let msg = NetworkMessage::FoundNode {
-                            nodes: node.read().await.find_node(&target_id, 20),
-                        };
-
-                        if let Err(err) = tx.send(msg) {
-                            eprintln!("failed to send result: {:?}", err);
-                        };
-                    }
-
-                    NetworkMessage::AddNode { id, addr } => {
-                        let mut w_node = node.write().await;
-                        w_node.add_node(&id, addr).await;
-
-                        if w_node.socket_addr.port() == 8001 {
-                            println!("{w_node}");
-                        }
-
-                        //tx.send(NetworkMessage::Ok);
-                    }
-                    _ => {}
-                }
+                let node = Arc::clone(&node);
+                Self::handle_tx(node, tx, msg).await
             }
         });
 
@@ -158,7 +147,7 @@ impl Node {
 }
 
 // routing methods
-impl Node {
+impl NetworkNode {
     pub async fn add_node(&mut self, other_id: &[u8], socket_addr: SocketAddr) {
         let bucket_idx = self.find_bucket_idx(other_id);
 
@@ -206,7 +195,7 @@ impl Node {
     // 1. get all nodes from bucket
     // 2. sort them by distance (from target id)
     // 3. return k from it
-    pub fn find_node(&self, target_id: &[u8], k: usize) -> Vec<NodeInfo> {
+    pub fn find_node(&self, target_id: &[u8], k: usize) -> Vec<NetworkNodeInfo> {
         let mut all_nodes = Vec::new();
 
         for bucket in &self.buckets {
@@ -222,7 +211,7 @@ impl Node {
         sorted_nodes
     }
 
-    pub async fn bootstrap(&mut self, seed_nodes: &[NodeInfo]) -> NetworkResult<()> {
+    pub async fn bootstrap(&mut self, seed_nodes: &[NetworkNodeInfo]) -> NetworkResult<()> {
         let id = self.id.clone();
 
         for seed in seed_nodes {
@@ -255,11 +244,11 @@ impl Node {
     //  2. save all nodes from response -> sort -> pick nodes to request
     pub async fn node_lookup(
         &mut self,
-        start_nodes: &[NodeInfo],
+        start_nodes: &[NetworkNodeInfo],
         target_id: &[u8],
         k: usize,
         is_bootstrap: bool, // if true adds found nodes to routing table
-    ) -> Option<NodeInfo> {
+    ) -> Option<NetworkNodeInfo> {
         //let close_nodes = self.find_node(target_id, k);
         if let Some(found) = start_nodes.iter().find(|node| node.compare_id(target_id)) {
             return Some(found.clone());
@@ -344,7 +333,10 @@ impl Node {
         NetOps::read(&mut stream).await
     }
 
-    fn sort_nodes_by_distance(nodes: &mut [NodeInfo], target_id: &[u8]) -> Vec<NodeInfo> {
+    fn sort_nodes_by_distance(
+        nodes: &mut [NetworkNodeInfo],
+        target_id: &[u8],
+    ) -> Vec<NetworkNodeInfo> {
         // sort by  distance
         nodes.sort_by(|a, b| {
             let dist_a = utils::xor_distance_256(a.get_id(), target_id);
@@ -355,9 +347,49 @@ impl Node {
 
         nodes.to_vec()
     }
+
+    pub async fn handle_tx(
+        node: Arc<RwLock<Self>>,
+        tx: oneshot::Sender<NetworkMessage>,
+        msg: NetworkMessage,
+    ) {
+        match msg {
+            NetworkMessage::FindNode { target_id } => {
+                Self::handle_find_node(node, tx, &target_id).await
+            }
+
+            NetworkMessage::AddNode { id, addr } => Self::handle_add_node(node, &id, addr).await,
+            _ => {}
+        }
+    }
+
+    pub async fn handle_find_node(
+        node: Arc<RwLock<Self>>,
+        tx: oneshot::Sender<NetworkMessage>,
+        target_id: &[u8],
+    ) {
+        let msg = NetworkMessage::FoundNode {
+            nodes: node.read().await.find_node(target_id, 20),
+        };
+
+        if let Err(err) = tx.send(msg) {
+            eprintln!("failed to send result: {:?}", err);
+        };
+    }
+
+    pub async fn handle_add_node(node: Arc<RwLock<Self>>, id: &[u8], addr: SocketAddr) {
+        let mut w_node = node.write().await;
+        w_node.add_node(id, addr).await;
+
+        if w_node.socket_addr.port() == 8001 {
+            println!("{w_node}");
+        }
+
+        //tx.send(NetworkMessage::Ok);
+    }
 }
 
-impl Display for Node {
+impl Display for NetworkNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "id: {}", utils::hash_to_string(&self.id))?;
 
@@ -382,13 +414,13 @@ mod node_tests {
 
     #[test]
     fn new() {
-        let node = Node::new(8000);
+        let node = NetworkNode::new(8000);
         dbg!(node);
     }
 
     #[tokio::test]
     async fn add_node() {
-        let mut node = Node::new(8000);
+        let mut node = NetworkNode::new(8000);
 
         for _ in 0..100 {
             let r_id = utils::sha256(Uuid::new_v4().to_string().as_bytes());

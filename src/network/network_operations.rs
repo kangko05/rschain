@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::errors::{NetworkError, NetworkResult};
 use super::message_handler::{MessageHandler, NetworkMessage};
-use super::node::NodeInfo;
+use super::network_node::NetworkNodeInfo;
 
 #[derive(Debug)]
 pub struct NetOps;
@@ -40,7 +40,7 @@ impl NetOps {
         Ok(serde_json::from_slice::<NetworkMessage>(&payload_buf)?)
     }
 
-    pub async fn ping(node_info: &NodeInfo) -> NetworkResult<bool> {
+    pub async fn ping(node_info: &NetworkNodeInfo) -> NetworkResult<bool> {
         let mut stream = TcpStream::connect(node_info.get_addr()).await?;
 
         NetOps::write(&mut stream, NetworkMessage::Ping).await?;

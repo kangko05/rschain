@@ -25,14 +25,24 @@ Consensus Algorithm: PoW (Proof of Work)
 5. Peer discovery
 
 ```plain
-rschain/
-├── src/
-│   ├── block/      # Block implementations
-│   ├── chain/      # Blockchain structure
-│   ├── network/    # P2P network implementation
-│   ├── consensus/  # Consensus algorithms
-│   └── main.rs
-├── Dockerfile
-├── docker-compose.yml
-└── README.md
+project/
+├── network/            # P2P 네트워크 모듈
+│   ├── mod.rs
+│   ├── node.rs         # DHT 노드 구현
+│   ├── message.rs      # 네트워크 메시지 정의
+│   ├── kbucket.rs      # k-bucket 구현
+│   └── operations.rs   # 네트워크 작업(읽기/쓰기)
+├── blockchain/         # 블록체인 구현 모듈
+│   ├── mod.rs
+│   ├── block.rs        # 블록 구조체 정의
+│   ├── transaction.rs  # 트랜잭션 구조체 정의
+│   ├── chain.rs        # 블록체인 관리
+│   ├── mempool.rs      # 메모리 풀 구현
+│   └── consensus.rs    # 합의 알고리즘
+└── node/               # 노드 유형 구현 모듈
+    ├── mod.rs
+    ├── bootstrap.rs    # 부트스트랩 노드
+    ├── full.rs         # 풀 노드
+    ├── mining.rs       # 마이닝 노드
+    └── light.rs        # 라이트 노드
 ```

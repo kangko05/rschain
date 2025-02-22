@@ -2,16 +2,16 @@
 
 use crate::utils;
 
+use super::network_node::NetworkNodeInfo;
 use super::network_operations::NetOps;
-use super::node::NodeInfo;
 use std::fmt::Display;
 use std::net::SocketAddr;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Kbucket {
     idx: usize, // idx in node buckets list
-    nodes: Vec<NodeInfo>,
-    wait_nodes: Vec<NodeInfo>,
+    nodes: Vec<NetworkNodeInfo>,
+    wait_nodes: Vec<NetworkNodeInfo>,
     k: usize,
 }
 
@@ -33,7 +33,7 @@ impl Kbucket {
             }
         }
 
-        let node_info = NodeInfo::new(node_id, socket_addr);
+        let node_info = NetworkNodeInfo::new(node_id, socket_addr);
 
         if self.nodes.len() < self.k {
             self.nodes.push(node_info);
@@ -42,7 +42,7 @@ impl Kbucket {
         }
     }
 
-    async fn handle_full_bucket(&mut self, node_info: &NodeInfo) {
+    async fn handle_full_bucket(&mut self, node_info: &NetworkNodeInfo) {
         let oldest_node = self.nodes[0].clone();
 
         match NetOps::ping(&oldest_node).await {
@@ -66,7 +66,7 @@ impl Kbucket {
         self.idx
     }
 
-    pub fn get_nodes(&self) -> &Vec<NodeInfo> {
+    pub fn get_nodes(&self) -> &Vec<NetworkNodeInfo> {
         &self.nodes
     }
 }

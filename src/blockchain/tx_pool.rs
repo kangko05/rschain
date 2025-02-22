@@ -3,7 +3,7 @@ use super::{
     Transaction,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TxPool {
     pool: Vec<Transaction>,
 }

@@ -5,24 +5,27 @@ use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 
-use super::errors::NetworkError;
-use super::errors::NetworkResult;
-use super::network_operations::NetOps;
+use crate::blockchain::Block;
+use crate::network::errors::{NetworkError, NetworkResult};
+use crate::network::network_operations::NetOps;
 
 use serde::{Deserialize, Serialize};
 
-use super::node::NodeInfo;
+use super::network_node::NetworkNodeInfo;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum NetworkMessage {
     FindNode { target_id: Vec<u8> },
-    FoundNode { nodes: Vec<NodeInfo> },
+    FoundNode { nodes: Vec<NetworkNodeInfo> },
 
     Ping,
     Pong,
 
     AddNode { id: Vec<u8>, addr: SocketAddr },
     Ok,
+
+    GetChain,
+    Blocks(Vec<Block>), // response for 'GetChain'
 }
 
 #[async_trait]
@@ -36,10 +39,10 @@ pub trait MessageHandler: Send + Sync + Clone {
 }
 
 #[derive(Clone, Debug)]
-pub struct NodeMessageHandler;
+pub struct NetworkNodeMessageHandler;
 
 #[async_trait]
-impl MessageHandler for NodeMessageHandler {
+impl MessageHandler for NetworkNodeMessageHandler {
     async fn handle_message(
         &self,
         stream: &mut TcpStream,
@@ -47,13 +50,11 @@ impl MessageHandler for NodeMessageHandler {
         msg: &NetworkMessage,
     ) -> NetworkResult<()> {
         match msg {
-            NetworkMessage::Ping => Self::handle_ping(stream).await?,
+            NetworkMessage::Ping => self.handle_ping(stream).await?,
             NetworkMessage::FindNode { target_id } => {
-                Self::handle_find_node(stream, req_tx, target_id).await?
+                self.handle_find_node(stream, req_tx, target_id).await?
             }
-            NetworkMessage::AddNode { id, addr } => {
-                Self::handle_add_node(req_tx, id, *addr).await?
-            }
+            NetworkMessage::AddNode { id, addr } => self.handle_add_node(req_tx, id, *addr).await?,
 
             _ => {}
         }
@@ -62,12 +63,13 @@ impl MessageHandler for NodeMessageHandler {
     }
 }
 
-impl NodeMessageHandler {
-    async fn handle_ping(stream: &mut TcpStream) -> NetworkResult<()> {
+impl NetworkNodeMessageHandler {
+    pub async fn handle_ping(&self, stream: &mut TcpStream) -> NetworkResult<()> {
         NetOps::write(stream, NetworkMessage::Pong).await
     }
 
-    async fn handle_find_node(
+    pub async fn handle_find_node(
+        &self,
         stream: &mut TcpStream,
         req_tx: mpsc::Sender<(NetworkMessage, oneshot::Sender<NetworkMessage>)>,
         target_id: &[u8],
@@ -91,7 +93,8 @@ impl NodeMessageHandler {
     // run add_node in node
     // TODO: think about this - maybe send Ok back to client? - do i even need to receive from rx
     // here?
-    async fn handle_add_node(
+    pub async fn handle_add_node(
+        &self,
         req_tx: mpsc::Sender<(NetworkMessage, oneshot::Sender<NetworkMessage>)>,
         target_id: &[u8],
         socket_addr: SocketAddr,
