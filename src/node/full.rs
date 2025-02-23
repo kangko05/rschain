@@ -61,8 +61,7 @@ impl FullNode {
                 Arc::clone(&network_node),
                 &id,
                 addr,
-            )
-            .await,
+            ),
             network_node,
             chain,
         }
@@ -123,6 +122,10 @@ impl FullNode {
     pub fn get_msg_handler(&self) -> &FullMessageHandler {
         &self.msg_handler
     }
+
+    pub fn get_base_node(&self) -> Arc<RwLock<NetworkNode>> {
+        Arc::clone(&self.network_node)
+    }
 }
 
 // run full node
@@ -155,6 +158,7 @@ impl FullNode {
                 break;
             } else {
                 req_nodes = failed;
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
 
@@ -187,16 +191,14 @@ impl MessageHandler for FullMessageHandler {
         msg: &NetworkMessage,
     ) -> NetworkResult<()> {
         match msg {
-            NetworkMessage::Ping => self.base.handle_ping(stream).await?,
+            NetworkMessage::Ping => self.handle_ping(stream).await?,
 
             NetworkMessage::FindNode { target_id } => {
-                self.base
-                    .handle_find_node(stream, req_tx, target_id)
-                    .await?
+                self.handle_find_node(stream, req_tx, target_id).await?
             }
 
             NetworkMessage::AddNode { id, addr } => {
-                self.base.handle_add_node(stream, req_tx, id, *addr).await?
+                self.handle_add_node(stream, req_tx, id, *addr).await?
             }
 
             NetworkMessage::GetChain => self.handle_get_chain(stream).await?,
@@ -211,16 +213,37 @@ impl MessageHandler for FullMessageHandler {
 }
 
 impl FullMessageHandler {
-    pub async fn new(
+    pub async fn handle_ping(&self, stream: &mut TcpStream) -> NetworkResult<()> {
+        self.base.handle_ping(stream).await
+    }
+
+    pub async fn handle_find_node(
+        &self,
+        stream: &mut TcpStream,
+        req_tx: mpsc::Sender<(NetworkMessage, oneshot::Sender<NetworkMessage>)>,
+        target_id: &[u8],
+    ) -> NetworkResult<()> {
+        self.base.handle_find_node(stream, req_tx, target_id).await
+    }
+
+    pub async fn handle_add_node(
+        &self,
+        stream: &mut TcpStream,
+        req_tx: mpsc::Sender<(NetworkMessage, oneshot::Sender<NetworkMessage>)>,
+        id: &[u8],
+        addr: SocketAddr,
+    ) -> NetworkResult<()> {
+        self.base.handle_add_node(stream, req_tx, id, addr).await
+    }
+
+    pub fn new(
         chain: Arc<RwLock<Chain>>,
         network_node: Arc<RwLock<NetworkNode>>,
         id: &[u8],
         addr: SocketAddr,
     ) -> Self {
-        let msg_handler = network_node.read().await.get_msg_handler().clone();
-
         Self {
-            base: msg_handler,
+            base: NetworkNodeMessageHandler {},
             chain,
             network_node,
             id: id.to_vec(),

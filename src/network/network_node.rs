@@ -66,8 +66,6 @@ pub struct NetworkNode {
     id: Vec<u8>,
     buckets: Vec<Kbucket>, // routing table
     socket_addr: SocketAddr,
-
-    msg_handler: NetworkNodeMessageHandler,
 }
 
 impl NetworkNode {
@@ -83,7 +81,6 @@ impl NetworkNode {
             id,
             buckets: Vec::with_capacity(256),
             socket_addr,
-            msg_handler: NetworkNodeMessageHandler {},
         }
     }
 
@@ -93,10 +90,6 @@ impl NetworkNode {
 
     pub fn get_addr(&self) -> SocketAddr {
         self.socket_addr
-    }
-
-    pub fn get_msg_handler(&self) -> &NetworkNodeMessageHandler {
-        &self.msg_handler
     }
 
     pub fn get_node_info(&self) -> NetworkNodeInfo {
