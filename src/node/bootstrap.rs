@@ -2,146 +2,72 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::RwLock;
 
-use crate::blockchain::Chain;
-use crate::network::{
-    MessageHandler, NetOps, NetworkMessage, NetworkNode, NetworkNodeMessageHandler, NetworkResult,
-};
+use crate::blockchain::{Block, BlockResult, Chain, Transaction};
+use crate::network::NetworkNode;
+use crate::utils;
+
+use super::full::FullMessageHandler;
 
 /*
  * bootstrap node
+ * - initialize first chain with genesis block
  */
 
 #[derive(Debug)]
 pub struct BootstrapNode {
-    network_node: NetworkNode,
+    network_node: Arc<RwLock<NetworkNode>>,
     chain: Arc<RwLock<Chain>>,
-    msg_handler: BootstrapMessageHandler,
+    msg_handler: FullMessageHandler,
 }
 
 impl BootstrapNode {
     pub fn new(port: u16) -> Self {
-        let chain = Arc::new(RwLock::new(Chain::new()));
+        // bootstrap node must have chain
+        let chain = Self::init_chain().expect("failed to init chain in bootstrap node");
+        let chain = Arc::new(RwLock::new(chain));
+
+        let network_node = NetworkNode::new(port);
+        let id = network_node.get_id().to_vec();
+        let addr = network_node.get_addr();
+
+        let network_node = Arc::new(RwLock::new(network_node));
 
         Self {
-            network_node: NetworkNode::new(port),
-            msg_handler: BootstrapMessageHandler::new(Arc::clone(&chain)),
+            msg_handler: FullMessageHandler::new(
+                Arc::clone(&chain),
+                Arc::clone(&network_node),
+                &id,
+                addr,
+            ),
+            network_node,
             chain,
         }
+    }
+
+    fn init_chain() -> BlockResult<Chain> {
+        let mut chain = Chain::new();
+
+        let genesis_hash = utils::hash_to_string(&utils::sha256("genesis".as_bytes()));
+        let first_tx = Transaction::coinbase(&genesis_hash, chain.get_block_height())?;
+
+        let mut blk = Block::new(&genesis_hash, &[first_tx])?;
+
+        blk.mine()?;
+        chain.genesis(&blk)?;
+
+        Ok(chain)
     }
 
     pub async fn run(&self) {
-        let socket_addr = self.network_node.get_addr();
-        let msg_handler = self.msg_handler.clone();
-        let (tx, mut rx) = mpsc::channel(100);
-
+        let node = Arc::clone(&self.network_node);
+        let handler = self.msg_handler.clone();
         let listen_handle =
-            tokio::spawn(async move { NetOps::listen(socket_addr, msg_handler, tx).await });
+            tokio::spawn(async move { NetworkNode::run(node, handler).await }).await;
 
-        let node = Arc::new(RwLock::new(self.network_node.clone()));
-        let channel_handle = tokio::spawn(async move {
-            while let Some((msg, tx)) = rx.recv().await {
-                let node = Arc::clone(&node);
-                match msg {
-                    NetworkMessage::FindNode { target_id } => {
-                        NetworkNode::handle_find_node(node, tx, &target_id).await;
-                    }
-
-                    NetworkMessage::AddNode { id, addr } => {
-                        NetworkNode::handle_add_node(node, &id, addr).await;
-                    }
-
-                    _ => {}
-                }
-
-                println!();
-            }
-        });
-
-        tokio::select! {
-            listen_result = listen_handle => {
-                if let Err(err) = listen_result {
-                    eprintln!("failed to join listen handle: {err}");
-                }
-            }
-
-            channel_result = channel_handle => {
-                if let Err(err) = channel_result {
-                    eprintln!("failed to join channel handle: {err}");
-                }
-            }
+        if let Err(err) = listen_handle {
+            eprintln!("failed to join listen handle: {err}");
         }
-    }
-}
-
-/*
- * bootstrap node message handler
- */
-
-#[derive(Debug, Clone)]
-struct BootstrapMessageHandler {
-    base: NetworkNodeMessageHandler,
-    chain: Arc<RwLock<Chain>>,
-}
-
-#[async_trait]
-impl MessageHandler for BootstrapMessageHandler {
-    async fn handle_message(
-        &self,
-        stream: &mut TcpStream,
-        req_tx: mpsc::Sender<(NetworkMessage, oneshot::Sender<NetworkMessage>)>,
-        msg: &NetworkMessage,
-    ) -> NetworkResult<()> {
-        match msg {
-            NetworkMessage::Ping => self.base.handle_ping(stream).await?,
-            NetworkMessage::FindNode { target_id } => {
-                self.base
-                    .handle_find_node(stream, req_tx, target_id)
-                    .await?
-            }
-            NetworkMessage::AddNode { id, addr } => {
-                self.base.handle_add_node(req_tx, id, *addr).await?
-            }
-            NetworkMessage::GetChain => self.handle_get_chain(stream).await?,
-
-            _ => {}
-        }
-
-        Ok(())
-    }
-}
-
-impl BootstrapMessageHandler {
-    pub fn new(chain: Arc<RwLock<Chain>>) -> Self {
-        Self {
-            base: NetworkNodeMessageHandler {},
-            chain,
-        }
-    }
-
-    async fn handle_get_chain(&self, stream: &mut TcpStream) -> NetworkResult<()> {
-        println!("got get chain message");
-
-        let blocks = self.chain.read().await.get_blocks().to_vec();
-        dbg!(&blocks);
-
-        let response = NetworkMessage::Blocks(blocks);
-        NetOps::write(stream, response).await?;
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod bootstrap_tests {
-    use super::*;
-
-    #[test]
-    fn new() {
-        let btnode = BootstrapNode::new(8000);
-        dbg!(btnode);
     }
 }

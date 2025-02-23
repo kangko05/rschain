@@ -27,7 +27,9 @@ impl Chain {
 
     pub fn from(blocks: Vec<Block>) -> BlockResult<Self> {
         if blocks.is_empty() {
-            return Err(BlockError::from_str(""));
+            return Err(BlockError::from_str(
+                "failed to construct a chain from blocks",
+            ));
         }
 
         let mut chain = Self::new();

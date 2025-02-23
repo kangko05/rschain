@@ -100,4 +100,33 @@ impl NetOps {
             }
         }
     }
+
+    /// returns failed broadcast list
+    /// retry n times
+    pub async fn broadcast(
+        close_nodes: &[NetworkNodeInfo],
+        msg: NetworkMessage,
+    ) -> Vec<NetworkNodeInfo> {
+        let mut failed = vec![];
+
+        for node in close_nodes {
+            match TcpStream::connect(node.get_addr()).await {
+                Ok(mut stream) => {
+                    if let Err(err) = Self::write(&mut stream, msg.clone()).await {
+                        eprintln!("failed to broadcast to {}: {}", node.get_addr(), err);
+                        failed.push(node.clone());
+                        continue;
+                    };
+                }
+
+                Err(err) => {
+                    eprintln!("failed to broadcast to {}: {}", node.get_addr(), err);
+                    failed.push(node.clone());
+                    continue;
+                }
+            }
+        }
+
+        failed
+    }
 }

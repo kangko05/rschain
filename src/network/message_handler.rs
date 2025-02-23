@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::blockchain::Block;
+use crate::blockchain::{Block, Transaction};
 use crate::network::errors::{NetworkError, NetworkResult};
 use crate::network::network_operations::NetOps;
 
@@ -15,17 +15,22 @@ use super::network_node::NetworkNodeInfo;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum NetworkMessage {
-    FindNode { target_id: Vec<u8> },
-    FoundNode { nodes: Vec<NetworkNodeInfo> },
-
-    Ping,
-    Pong,
-
-    AddNode { id: Vec<u8>, addr: SocketAddr },
     Ok,
 
     GetChain,
     Blocks(Vec<Block>), // response for 'GetChain'
+
+    Ping,
+    Pong,
+
+    NewTx(Transaction), // broadcast
+
+    // need to send tx to node
+    NewNode { id: Vec<u8>, addr: SocketAddr }, // this need to be broadcasted
+    AddNode { id: Vec<u8>, addr: SocketAddr }, // this will add nodes
+
+    FindNode { target_id: Vec<u8> },
+    FoundNode { nodes: Vec<NetworkNodeInfo> },
 }
 
 #[async_trait]
@@ -54,7 +59,9 @@ impl MessageHandler for NetworkNodeMessageHandler {
             NetworkMessage::FindNode { target_id } => {
                 self.handle_find_node(stream, req_tx, target_id).await?
             }
-            NetworkMessage::AddNode { id, addr } => self.handle_add_node(req_tx, id, *addr).await?,
+            NetworkMessage::AddNode { id, addr } | NetworkMessage::NewNode { id, addr } => {
+                self.handle_add_node(stream, req_tx, id, *addr).await?
+            }
 
             _ => {}
         }
@@ -95,6 +102,7 @@ impl NetworkNodeMessageHandler {
     // here?
     pub async fn handle_add_node(
         &self,
+        stream: &mut TcpStream,
         req_tx: mpsc::Sender<(NetworkMessage, oneshot::Sender<NetworkMessage>)>,
         target_id: &[u8],
         socket_addr: SocketAddr,
@@ -104,12 +112,15 @@ impl NetworkNodeMessageHandler {
             addr: socket_addr,
         };
 
-        let (tx, _) = oneshot::channel();
+        let (tx, rx) = oneshot::channel();
 
         if let Err(err) = req_tx.send((msg, tx)).await {
             return Err(NetworkError::Str(format!("{err}")));
         };
 
-        Ok(())
+        match rx.await {
+            Ok(_) => Ok(NetOps::write(stream, NetworkMessage::Ok).await?),
+            Err(err) => Err(NetworkError::Str(format!("{err}"))),
+        }
     }
 }

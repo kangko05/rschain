@@ -1,15 +1,23 @@
 #![allow(dead_code)]
 
+use std::error::Error;
 use std::fmt::Display;
 
-use std::error::Error;
+use crate::blockchain::BlockError;
 
 #[derive(Debug)]
 pub enum NetworkError {
     Str(String),
+    BlockError(BlockError),
     SerdeJsonError(serde_json::Error),
     IoError(tokio::io::Error),
     ConnectionClosed,
+}
+
+impl From<BlockError> for NetworkError {
+    fn from(value: BlockError) -> Self {
+        Self::BlockError(value)
+    }
 }
 
 impl From<serde_json::Error> for NetworkError {
@@ -37,6 +45,7 @@ impl Display for NetworkError {
             Self::SerdeJsonError(v) => write!(f, "{}", v),
             Self::IoError(v) => write!(f, "{}", v),
             Self::ConnectionClosed => write!(f, "connection closed"),
+            Self::BlockError(err) => write!(f, "{}", err),
         }
     }
 }

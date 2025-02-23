@@ -336,8 +336,6 @@ mod tx_tests {
         )
         .unwrap();
 
-        dbg!(tx3.clone());
-
         let mut blk1 =
             Block::new(&chain.get_last_block_hash_string().unwrap(), &[tx2, tx3]).unwrap();
         blk1.mine().unwrap();

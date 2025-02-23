@@ -149,6 +149,10 @@ impl NetworkNode {
 // routing methods
 impl NetworkNode {
     pub async fn add_node(&mut self, other_id: &[u8], socket_addr: SocketAddr) {
+        if other_id.eq(&self.id) || self.socket_addr == socket_addr {
+            return;
+        }
+
         let bucket_idx = self.find_bucket_idx(other_id);
 
         if !self.bucket_exists(bucket_idx) {
@@ -358,7 +362,9 @@ impl NetworkNode {
                 Self::handle_find_node(node, tx, &target_id).await
             }
 
-            NetworkMessage::AddNode { id, addr } => Self::handle_add_node(node, &id, addr).await,
+            NetworkMessage::AddNode { id, addr } => {
+                Self::handle_add_node(node, tx, &id, addr).await
+            }
             _ => {}
         }
     }
@@ -377,15 +383,43 @@ impl NetworkNode {
         };
     }
 
-    pub async fn handle_add_node(node: Arc<RwLock<Self>>, id: &[u8], addr: SocketAddr) {
+    pub async fn handle_add_node(
+        node: Arc<RwLock<Self>>,
+        tx: oneshot::Sender<NetworkMessage>,
+        id: &[u8],
+        addr: SocketAddr,
+    ) {
+        // add node here
         let mut w_node = node.write().await;
         w_node.add_node(id, addr).await;
 
-        if w_node.socket_addr.port() == 8001 {
-            println!("{w_node}");
-        }
+        //w_node.find_node(id, 20);
+        //{
+        //    // broadcast to close nod
+        //    let msg = NetworkMessage::NewNode {
+        //        id: id.to_vec(),
+        //        addr,
+        //    };
+        //
+        //    for node in close_nodes {
+        //        match TcpStream::connect(node.get_addr()).await {
+        //            Ok(mut stream) => {
+        //                if let Err(err) = NetOps::write(&mut stream, msg.clone()).await {
+        //                    eprintln!("failed to broadcast to {}: {}", node.get_addr(), err);
+        //                }
+        //            }
+        //
+        //            Err(err) => {
+        //                eprintln!("failed to broadcast to {}: {}", node.get_addr(), err);
+        //                continue;
+        //            }
+        //        };
+        //    }
+        //}
 
-        //tx.send(NetworkMessage::Ok);
+        if tx.send(NetworkMessage::Ok).is_err() {
+            eprintln!("failed to send ok back");
+        };
     }
 }
 
