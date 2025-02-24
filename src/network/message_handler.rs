@@ -2,8 +2,9 @@
 
 use async_trait::async_trait;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, RwLock};
 
 use crate::blockchain::{Block, Transaction};
 use crate::network::errors::{NetworkError, NetworkResult};
@@ -12,6 +13,7 @@ use crate::network::network_operations::NetOps;
 use serde::{Deserialize, Serialize};
 
 use super::network_node::NetworkNodeInfo;
+use super::NetworkNode;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum NetworkMessage {
@@ -31,6 +33,8 @@ pub enum NetworkMessage {
 
     FindNode { target_id: Vec<u8> },
     FoundNode { nodes: Vec<NetworkNodeInfo> },
+
+    NewBlock(Block),
 }
 
 #[async_trait]
@@ -44,7 +48,10 @@ pub trait MessageHandler: Send + Sync + Clone {
 }
 
 #[derive(Clone, Debug)]
-pub struct NetworkNodeMessageHandler;
+pub struct NetworkNodeMessageHandler {
+    node: Arc<RwLock<NetworkNode>>,
+    id: Vec<u8>,
+}
 
 #[async_trait]
 impl MessageHandler for NetworkNodeMessageHandler {
@@ -71,6 +78,11 @@ impl MessageHandler for NetworkNodeMessageHandler {
 }
 
 impl NetworkNodeMessageHandler {
+    pub async fn new(node: Arc<RwLock<NetworkNode>>) -> Self {
+        let id = node.read().await.get_id().clone();
+        Self { node, id }
+    }
+
     pub async fn handle_ping(&self, stream: &mut TcpStream) -> NetworkResult<()> {
         NetOps::write(stream, NetworkMessage::Pong).await
     }
@@ -122,5 +134,30 @@ impl NetworkNodeMessageHandler {
             Ok(_) => Ok(NetOps::write(stream, NetworkMessage::Ok).await?),
             Err(err) => Err(NetworkError::Str(format!("{err}"))),
         }
+    }
+
+    // broadcast new tx
+    pub async fn handle_new_tx(
+        &self,
+        stream: &mut TcpStream,
+        new_tx: &Transaction,
+    ) -> NetworkResult<()> {
+        // TODO: think about how to verify new transaction
+
+        let msg = NetworkMessage::NewTx(new_tx.clone());
+        let close_nodes = self.node.read().await.find_node(&self.id, 20);
+        let mut req_nodes = close_nodes;
+
+        for _ in 0..3 {
+            let failed = NetOps::broadcast(&req_nodes, msg.clone()).await;
+
+            if failed.is_empty() {
+                break;
+            } else {
+                req_nodes = failed;
+            }
+        }
+
+        NetOps::write(stream, NetworkMessage::Ok).await
     }
 }

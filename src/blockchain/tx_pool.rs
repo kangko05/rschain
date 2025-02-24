@@ -67,8 +67,11 @@ impl TxPool {
         self.pool.contains(tx)
     }
 
-    pub fn clear(&mut self) {
-        self.pool = vec![];
+    pub fn clear(&mut self) -> Vec<Transaction> {
+        let txs = self.pool.clone();
+        self.pool.clear();
+
+        txs
     }
 
     fn heapify(&mut self) {

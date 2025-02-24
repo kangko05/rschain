@@ -49,6 +49,11 @@ impl Chain {
         Ok(chain)
     }
 
+    // TODO: implement this
+    pub fn verify(&self, new_block: &Block) -> BlockResult<()> {
+        Ok(())
+    }
+
     pub fn add_tx(&mut self, tx: &Transaction) {
         self.tx_pool.add_one(tx);
     }

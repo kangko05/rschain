@@ -7,7 +7,7 @@ mod merkle_tree;
 mod transaction;
 mod tx_pool;
 
-pub use block::Block;
+pub use block::{Block, BlockHeader};
 pub use chain::Chain;
 pub use errors::{BlockError, BlockResult, MerkleError, MerkleResult, TxResult};
 pub use merkle_tree::MerkleTree;

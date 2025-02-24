@@ -1,14 +1,18 @@
 #![allow(dead_code)]
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, RwLock};
+
+use crate::node::{MAX_RETRY, NUM_CLOSE_NODES};
 
 use super::errors::{NetworkError, NetworkResult};
 use super::message_handler::{MessageHandler, NetworkMessage};
 use super::network_node::NetworkNodeInfo;
+use super::NetworkNode;
 
 #[derive(Debug)]
 pub struct NetOps;
@@ -128,5 +132,35 @@ impl NetOps {
         }
 
         failed
+    }
+
+    pub async fn broadcast_self(network_node: Arc<RwLock<NetworkNode>>) {
+        let (id, addr, close_nodes) = {
+            let r_node = network_node.read().await;
+            let id = r_node.get_id();
+            let addr = r_node.get_addr();
+            let close_nodes = r_node.find_node(id, NUM_CLOSE_NODES);
+
+            (id.clone(), addr, close_nodes)
+        };
+
+        let mut req_nodes = close_nodes;
+
+        let newnode_msg = NetworkMessage::NewNode {
+            id: id.clone(),
+            addr,
+        };
+
+        // retry broadcasting
+        for _ in 0..MAX_RETRY {
+            let failed = NetOps::broadcast(&req_nodes, newnode_msg.clone()).await;
+
+            if failed.is_empty() {
+                break;
+            } else {
+                req_nodes = failed;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
     }
 }

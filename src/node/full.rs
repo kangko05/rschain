@@ -7,14 +7,20 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
-use crate::blockchain::{Chain, Transaction};
+use crate::blockchain::{Block, BlockError, Chain, Transaction};
 use crate::network::{
     MessageHandler, NetOps, NetworkError, NetworkMessage, NetworkNode, NetworkNodeMessageHandler,
     NetworkResult,
 };
 
+use super::{MAX_RETRY, NUM_CLOSE_NODES};
+
 /*
  * full node
+ * - TODO: fullnode can manage tx pool
+ *      1. to prevent double spending
+ *      2. for block tx validation
+ *      3. network sync
  */
 
 #[derive(Debug)]
@@ -35,7 +41,7 @@ impl FullNode {
             .await
             .expect("failed to connect to bootstrap node");
 
-        let chain = Self::get_chain(&mut stream)
+        let chain = Self::get_chain_bootstrap(&mut stream)
             .await
             .expect("failed to chain data from bootstrap node");
 
@@ -61,13 +67,14 @@ impl FullNode {
                 Arc::clone(&network_node),
                 &id,
                 addr,
-            ),
+            )
+            .await,
             network_node,
             chain,
         }
     }
 
-    pub async fn get_chain(stream: &mut TcpStream) -> NetworkResult<Chain> {
+    pub async fn get_chain_bootstrap(stream: &mut TcpStream) -> NetworkResult<Chain> {
         NetOps::write(stream, NetworkMessage::GetChain).await?;
         let blocks = NetOps::read(stream).await?;
 
@@ -126,6 +133,10 @@ impl FullNode {
     pub fn get_base_node(&self) -> Arc<RwLock<NetworkNode>> {
         Arc::clone(&self.network_node)
     }
+
+    pub fn get_chain(&self) -> Arc<RwLock<Chain>> {
+        Arc::clone(&self.chain)
+    }
 }
 
 // run full node
@@ -139,28 +150,9 @@ impl FullNode {
         });
 
         // wait for listener to start
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        // broadcast to other nodes
-        let id = self.network_node.read().await.get_id().to_vec();
-        let addr = self.network_node.read().await.get_addr();
-
-        let close_nodes = self.network_node.read().await.find_node(&id, 20);
-        let mut req_nodes = close_nodes;
-
-        let newnode_msg = NetworkMessage::NewNode { id, addr };
-
-        // retry broadcasting
-        for _ in 0..3 {
-            let failed = NetOps::broadcast(&req_nodes, newnode_msg.clone()).await;
-
-            if failed.is_empty() {
-                break;
-            } else {
-                req_nodes = failed;
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
+        NetOps::broadcast_self(Arc::clone(&self.network_node)).await;
 
         // wait for listener
         if let Err(err) = listen_handle.await {
@@ -205,6 +197,8 @@ impl MessageHandler for FullMessageHandler {
 
             NetworkMessage::NewTx(transaction) => self.handle_new_tx(stream, transaction).await?,
 
+            NetworkMessage::NewBlock(new_blk) => self.handle_new_block(new_blk.clone()).await?,
+
             _ => {}
         }
 
@@ -236,14 +230,14 @@ impl FullMessageHandler {
         self.base.handle_add_node(stream, req_tx, id, addr).await
     }
 
-    pub fn new(
+    pub async fn new(
         chain: Arc<RwLock<Chain>>,
         network_node: Arc<RwLock<NetworkNode>>,
         id: &[u8],
         addr: SocketAddr,
     ) -> Self {
         Self {
-            base: NetworkNodeMessageHandler {},
+            base: NetworkNodeMessageHandler::new(Arc::clone(&network_node)).await,
             chain,
             network_node,
             id: id.to_vec(),
@@ -280,5 +274,32 @@ impl FullMessageHandler {
         }
 
         NetOps::write(stream, NetworkMessage::Ok).await
+    }
+
+    pub async fn handle_new_block(&self, new_block: Block) -> NetworkResult<()> {
+        {
+            // verify new block
+            let r_chain = self.chain.read().await;
+            if r_chain.verify(&new_block).is_err() {
+                return Err(NetworkError::BlockError(BlockError::from_str(
+                    "invalid block",
+                )));
+            }
+        }
+
+        {
+            // add to chain
+            let mut w_chain = self.chain.write().await;
+            w_chain.add_blk(&new_block)?;
+        }
+
+        {
+            // broadcast new block
+            let r_node = self.network_node.read().await;
+            let close_nodes = r_node.find_node(r_node.get_id(), NUM_CLOSE_NODES);
+            NetOps::broadcast(&close_nodes, NetworkMessage::NewBlock(new_block)).await;
+        }
+
+        Ok(())
     }
 }

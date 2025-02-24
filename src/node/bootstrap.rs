@@ -23,7 +23,7 @@ pub struct BootstrapNode {
 }
 
 impl BootstrapNode {
-    pub fn new(port: u16) -> Self {
+    pub async fn new(port: u16) -> Self {
         // bootstrap node must have chain
         let chain = Self::init_chain().expect("failed to init chain in bootstrap node");
         let chain = Arc::new(RwLock::new(chain));
@@ -40,7 +40,8 @@ impl BootstrapNode {
                 Arc::clone(&network_node),
                 &id,
                 addr,
-            ),
+            )
+            .await,
             network_node,
             chain,
         }

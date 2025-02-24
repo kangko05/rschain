@@ -22,7 +22,7 @@ use super::{
 use crate::utils;
 
 #[derive(Debug, Clone, Deserialize)]
-struct BlockHeader {
+pub struct BlockHeader {
     previous_hash: String,
     merkle_root: Vec<u8>,
     timestamp: u64,
@@ -181,13 +181,17 @@ impl Block {
         Ok(&self.transactions)
     }
 
-    /// TODO: implement this
+    // TODO: implement this
     pub fn is_empty(&self) -> bool {
         false
     }
 
     pub fn get_max_tx(&self) -> usize {
         self.max_tx
+    }
+
+    pub fn get_header(&self) -> &BlockHeader {
+        &self.header
     }
 }
 

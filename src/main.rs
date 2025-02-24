@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use tokio::task::JoinSet;
 
 use self::node::{BootstrapNode, FullNode, MiningNode};
+use self::wallet::Wallet;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -18,21 +19,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut js = JoinSet::new();
 
     js.spawn(async move {
-        let bdnode = BootstrapNode::new(8001);
+        let bdnode = BootstrapNode::new(8001).await;
         bdnode.run().await;
     });
 
-    std::thread::sleep(time::Duration::from_secs(3));
+    tokio::time::sleep(time::Duration::from_secs(3)).await;
 
     // full nodes
     js.spawn(async move {
         let fullnode = FullNode::new(bootstrap_addr, 8002).await;
 
         tokio::spawn(async move {
-            std::thread::sleep(std::time::Duration::from_secs(10));
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         });
-
-        tokio::spawn(async move {});
 
         fullnode.run().await;
     });
@@ -43,7 +42,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     js.spawn(async move {
-        let _mining_node = MiningNode::new(bootstrap_addr, 8004).await;
+        let wallet = Wallet::new();
+        let mining_node = MiningNode::new(bootstrap_addr, 8004, wallet).await;
+        mining_node.run().await;
     });
 
     js.join_all().await;
